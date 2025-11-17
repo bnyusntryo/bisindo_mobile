@@ -23,7 +23,7 @@ class _DetectionPageState extends State<DetectionPage> {
 
   List<Map<String, dynamic>> yoloResults = [];
 
-  // === SMOOTHING & STABILIZATION ===
+  // === SMOOTHING & STABILIZATION (LOGIC TIDAK DIUBAH) ===
   final Map<String, List<double>> _prevDisplayBoxes = {};
   final Map<String, List<double>> _confidenceHistory = {};
   final int _confidenceHistorySize = 3;
@@ -32,24 +32,27 @@ class _DetectionPageState extends State<DetectionPage> {
   Map<String, dynamic>? _prevBestDetection;
   int _framesSinceLastDetection = 0;
 
-  // === CONFIGURABLE PARAMETERS ===
+  // === CONFIGURABLE PARAMETERS (LOGIC TIDAK DIUBAH) ===
   double modelConfThreshold = 0.20;
   double modelIouThreshold = 0.40;
   double modelClassThreshold = 0.20;
   double displayConfThreshold = 0.25;
-  
+
   double boxSmoothingAlpha = 0.7;
-  
+
   final int _minDetectionFrames = 1;
   final int _maxFramesWithoutDetection = 3;
-  
+
   bool forceFrontCamera = true;
-  bool debugMode = true;
+  bool debugMode = false;
   bool bypassFilters = false;
 
   // Tracking untuk debug
   int _totalFrames = 0;
   int _detectionCount = 0;
+
+  // Warna Aksen Utama (Konsisten dengan main.dart)
+  static const Color primaryTeal = Color(0xFF004D40);
 
   @override
   void initState() {
@@ -57,6 +60,14 @@ class _DetectionPageState extends State<DetectionPage> {
     init();
   }
 
+  @override
+  void dispose() {
+    controller?.dispose();
+    vision.closeYoloModel();
+    super.dispose();
+  }
+
+  // --- LOGIC FUNCTIONS (TIDAK DIUBAH) ---
   Future<void> init() async {
     try {
       cameras = await availableCameras();
@@ -67,13 +78,6 @@ class _DetectionPageState extends State<DetectionPage> {
     } catch (e) {
       debugPrint("❌ Error init: $e");
     }
-  }
-
-  @override
-  void dispose() {
-    controller?.dispose();
-    vision.closeYoloModel();
-    super.dispose();
   }
 
   Future<void> loadYoloModel() async {
@@ -140,7 +144,7 @@ class _DetectionPageState extends State<DetectionPage> {
 
       isBusy = true;
       _totalFrames++;
-      
+
       try {
         await runYolo(image);
       } catch (e) {
@@ -161,7 +165,7 @@ class _DetectionPageState extends State<DetectionPage> {
     _prevDisplayBoxes.clear();
     _confidenceHistory.clear();
     _classFrameCount.clear();
-    
+
     debugPrint("📊 Session Stats: $_detectionCount detections in $_totalFrames frames");
   }
 
@@ -208,7 +212,7 @@ class _DetectionPageState extends State<DetectionPage> {
 
     _framesSinceLastDetection = 0;
     _detectionCount++;
-    
+
     // Debug log setiap deteksi
     if (_detectionCount % 10 == 0) {
       debugPrint("🎯 Detection #$_detectionCount: ${result.length} objects");
@@ -273,7 +277,7 @@ class _DetectionPageState extends State<DetectionPage> {
     // NMS: Buang box yang overlap
     validDetections.sort((a, b) => b['box'][4].compareTo(a['box'][4]));
     List<Map<String, dynamic>> nmsResults = [];
-    
+
     for (var det in validDetections) {
       bool overlap = false;
       for (var saved in nmsResults) {
@@ -297,35 +301,293 @@ class _DetectionPageState extends State<DetectionPage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (!isLoaded || controller == null || !controller!.value.isInitialized) {
-      return const Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 20),
-              Text("Loading model..."),
-            ],
+  // --- UI WIDGETS YANG DI-UPGRADE ---
+
+  // 1. Loading screen yang lebih bersih
+  Widget _buildLoadingScreen(BuildContext context) {
+    final theme = Theme.of(context).textTheme;
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(
+              color: primaryTeal,
+              strokeWidth: 4,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              "Memuat Model Deteksi...",
+              style: theme.titleMedium?.copyWith(
+                color: primaryTeal,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 2. Box deteksi yang lebih modern
+  List<Widget> _buildBoxes(
+      BoxConstraints constraints,
+      double sensorW,
+      double sensorH,
+      double scale,
+      double offsetX,
+      double offsetY) {
+    if (yoloResults.isEmpty) return [];
+
+    final isFrontCamera = cameras[selectedCameraIndex].lensDirection ==
+        CameraLensDirection.front;
+    const double borderRadius = 6.0;
+
+    return yoloResults.map((det) {
+      final box = det['box'];
+      final tag = det['tag'];
+      final conf = box[4];
+
+      // LOGIC: Scaling dan Koordinat
+      double x1 = box[0] * scale + offsetX;
+      double y1 = box[1] * scale + offsetY;
+      double x2 = box[2] * scale + offsetX;
+      double y2 = box[3] * scale + offsetY;
+
+      if (isFrontCamera) {
+        double oldY1 = y1;
+        double oldY2 = y2;
+        y1 = constraints.maxHeight - oldY2;
+        y2 = constraints.maxHeight - oldY1;
+      }
+
+      double left = math.min(x1, x2);
+      double right = math.max(x1, x2);
+      double top = math.min(y1, y2);
+      double bottom = math.max(y1, y2);
+
+      // Smoothing posisi box (Logic tidak diubah)
+      final smoothKey = tag;
+      if (_prevDisplayBoxes.containsKey(smoothKey)) {
+        final prev = _prevDisplayBoxes[smoothKey]!;
+        left = prev[0] + (left - prev[0]) * boxSmoothingAlpha;
+        top = prev[1] + (top - prev[1]) * boxSmoothingAlpha;
+        right = prev[2] + (right - prev[2]) * boxSmoothingAlpha;
+        bottom = prev[3] + (bottom - prev[3]) * boxSmoothingAlpha;
+      }
+      _prevDisplayBoxes[smoothKey] = [left, top, right, bottom];
+
+      double w = (right - left).abs();
+      double h = (bottom - top).abs();
+
+      // Menggunakan warna aksen untuk visual yang lebih profesional
+      Color borderColor = conf > 0.6 ? Colors.greenAccent.shade400 : Colors.white; 
+      Color labelColor = conf > 0.6 ? Colors.greenAccent.shade400 : primaryTeal;
+
+      return Positioned(
+        left: left,
+        top: top,
+        width: w,
+        height: h,
+        child: Container(
+          // Container Border Box
+          decoration: BoxDecoration(
+            border: Border.all(color: borderColor, width: 2.5), 
+            borderRadius: BorderRadius.circular(borderRadius),
+          ),
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: Container(
+              // PERBAIKAN UTAMA ASSERTION ERROR: 'color' dihapus dari Container,
+              // dan hanya didefinisikan di dalam BoxDecoration.
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: labelColor, 
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(borderRadius - 1), 
+                  bottomRight: Radius.circular(3),
+                ),
+              ),
+              child: Text(
+                "$tag ${(conf * 100).toStringAsFixed(0)}%",
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
           ),
         ),
       );
+    }).toList();
+  }
+
+  // 3. Status Indicator yang lebih terintegrasi
+  Widget _buildStatusIndicator() {
+    final detectedTags = yoloResults.map((r) => r['tag']).join(', ');
+    final displayText = detectedTags.isEmpty
+        ? (isDetecting ? "Menganalisis Gerakan..." : "Siap Deteksi")
+        : detectedTags.toUpperCase();
+    
+    // Status visual
+    final displayColor = detectedTags.isEmpty 
+        ? (isDetecting ? Colors.blueGrey.shade600 : primaryTeal)
+        : Colors.green.shade600;
+    
+    final displayIcon = detectedTags.isEmpty
+        ? (isDetecting ? Icons.videocam : Icons.search)
+        : Icons.waving_hand;
+
+    return Positioned(
+      // PERBAIKAN POSISI: Selalu tempatkan di 100px dari bawah agar tidak menumpuk dengan FAB
+      bottom: 100, 
+      left: 0,
+      right: 0,
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: BoxDecoration(
+            // Perbaikan Deprecated: withOpacity(0.95) -> withAlpha(242)
+            color: displayColor.withAlpha(242), 
+            borderRadius: BorderRadius.circular(25), 
+            boxShadow: [
+              BoxShadow(
+                // Perbaikan Deprecated: withOpacity(0.2) -> withAlpha(51)
+                color: Colors.black.withAlpha(51), 
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(displayIcon, color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Text(
+                displayText,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 4. Debug Panel yang lebih ringkas
+  Widget _buildDebugPanel() {
+    return Positioned(
+      bottom: 200, 
+      left: 20,
+      right: 20,
+      child: Card(
+        // Perbaikan Deprecated: withOpacity(0.9) -> withAlpha(229)
+        color: Colors.grey.shade900.withAlpha(229), 
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        elevation: 5,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    "⚙️ DEBUG PANEL",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    "Frames: $_totalFrames | Detections: $_detectionCount",
+                    style: const TextStyle(color: Colors.white70, fontSize: 10),
+                  ),
+                ],
+              ),
+              const Divider(color: Colors.white30),
+              Row(
+                children: [
+                  const Text("Conf. Th:",
+                      style: TextStyle(color: Colors.white, fontSize: 12)),
+                  Expanded(
+                    child: Slider(
+                      value: displayConfThreshold,
+                      min: 0.1,
+                      max: 0.9,
+                      divisions: 16,
+                      activeColor: primaryTeal,
+                      // Perbaikan Deprecated: withOpacity(0.3) -> withAlpha(76)
+                      inactiveColor: primaryTeal.withAlpha(76), 
+                      label: "${(displayConfThreshold * 100).toStringAsFixed(0)}%",
+                      onChanged: (v) => setState(() => displayConfThreshold = v),
+                    ),
+                  ),
+                  Text(
+                    "${(displayConfThreshold * 100).toStringAsFixed(0)}%",
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(
+                height: 30,
+                child: CheckboxListTile(
+                  title: const Text(
+                    "Bypass Filters",
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                  value: bypassFilters,
+                  checkColor: primaryTeal,
+                  activeColor: Colors.white,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  onChanged: (v) => setState(() => bypassFilters = v!),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 5. Main Build
+  @override
+  Widget build(BuildContext context) {
+    if (!isLoaded || controller == null || !controller!.value.isInitialized) {
+      return _buildLoadingScreen(context); 
     }
+
+    final primaryColor = Theme.of(context).colorScheme.primary;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Deteksi BISINDO"),
-        backgroundColor: Colors.teal,
+        title: const Text("BISINDO Detector"),
         actions: [
           IconButton(
-            icon: const Icon(Icons.cameraswitch),
+            icon: const Icon(Icons.cameraswitch_outlined),
             onPressed: switchCamera,
+            color: primaryColor,
           ),
           IconButton(
             icon: Icon(debugMode ? Icons.bug_report : Icons.bug_report_outlined),
             onPressed: () => setState(() => debugMode = !debugMode),
+            color: primaryColor,
           ),
         ],
       ),
@@ -344,7 +606,7 @@ class _DetectionPageState extends State<DetectionPage> {
             sensorH = previewSize.height;
           }
 
-          // Full screen logic
+          // Full screen logic (Logic tidak diubah)
           double scaleX = constraints.maxWidth / sensorW;
           double scaleY = constraints.maxHeight / sensorH;
           double finalScale = math.max(scaleX, scaleY);
@@ -381,236 +643,33 @@ class _DetectionPageState extends State<DetectionPage> {
                 ),
               ),
 
-              // LAYER 3: STATUS INDICATOR (DIUBAH)
-              _buildStatusIndicator(),
-
-              // LAYER 4: DEBUG PANEL
+              // LAYER 3: DEBUG PANEL
               if (debugMode) _buildDebugPanel(),
 
-              // LAYER 5: TOMBOL START
+              // LAYER 4: STATUS INDICATOR (Posisi dipindah)
+              _buildStatusIndicator(),
+
+              // LAYER 5: TOMBOL START/STOP (FAB) - Tetap di bottom: 30
               Positioned(
-                bottom: 30,
+                bottom: 30, 
                 left: 0,
                 right: 0,
                 child: Center(
-                  child: FloatingActionButton.extended(
+                  child: FloatingActionButton(
+                    heroTag: "fab_action",
                     onPressed: isDetecting ? stopDetection : startDetection,
-                    icon: Icon(isDetecting ? Icons.stop : Icons.play_arrow),
-                    label: Text(isDetecting ? "STOP" : "MULAI"),
-                    backgroundColor: isDetecting ? Colors.red : Colors.teal,
+                    backgroundColor: isDetecting ? Colors.red.shade700 : primaryColor,
+                    foregroundColor: Colors.white,
+                    child: Icon(
+                      isDetecting ? Icons.stop : Icons.play_arrow_rounded, 
+                      size: 32,
+                    ), 
                   ),
                 ),
               ),
             ],
           );
         },
-      ),
-    );
-  }
-
-  List<Widget> _buildBoxes(
-      BoxConstraints constraints,
-      double sensorW,
-      double sensorH,
-      double scale,
-      double offsetX,
-      double offsetY) {
-    if (yoloResults.isEmpty) return [];
-
-    final isFrontCamera = cameras[selectedCameraIndex].lensDirection == 
-        CameraLensDirection.front;
-
-    return yoloResults.map((det) {
-      final box = det['box'];
-      final tag = det['tag'];
-      final conf = box[4];
-
-      // 1. Hitung Koordinat Normal (Tanpa peduli arah kamera dulu)
-      double x1 = box[0] * scale + offsetX;
-      double y1 = box[1] * scale + offsetY;
-      double x2 = box[2] * scale + offsetX;
-      double y2 = box[3] * scale + offsetY;
-
-      // 2. LOGIC FIX: FLIP Y (ATAS-BAWAH) SAJA!
-      if (isFrontCamera) {
-        double oldY1 = y1; double oldY2 = y2;
-        // Balik Y relatif terhadap tinggi layar
-        y1 = constraints.maxHeight - oldY2;
-        y2 = constraints.maxHeight - oldY1;
-      }
-
-      // 3. Safety check urutan koordinat
-      double left = math.min(x1, x2);
-      double right = math.max(x1, x2);
-      double top = math.min(y1, y2);
-      double bottom = math.max(y1, y2);
-
-      // Smoothing posisi box
-      final smoothKey = tag;
-      if (_prevDisplayBoxes.containsKey(smoothKey)) {
-        final prev = _prevDisplayBoxes[smoothKey]!;
-        left = prev[0] + (left - prev[0]) * boxSmoothingAlpha;
-        top = prev[1] + (top - prev[1]) * boxSmoothingAlpha;
-        right = prev[2] + (right - prev[2]) * boxSmoothingAlpha;
-        bottom = prev[3] + (bottom - prev[3]) * boxSmoothingAlpha;
-      }
-      _prevDisplayBoxes[smoothKey] = [left, top, right, bottom];
-
-      double w = (right - left).abs();
-      double h = (bottom - top).abs();
-
-      Color color = conf > 0.6
-          ? Colors.green
-          : (conf > 0.4 ? Colors.orange : Colors.red);
-
-      return Positioned(
-        left: left,
-        top: top,
-        width: w,
-        height: h,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: color, width: 3),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Align(
-            alignment: Alignment.topLeft,
-            child: Container(
-              color: color,
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              child: Text(
-                "$tag ${(conf * 100).toStringAsFixed(0)}%",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    }).toList();
-  }
-
-  Widget _buildStatusIndicator() {
-    // Hanya ambil satu hasil deteksi untuk ditampilkan di status bar
-    final detectedTags = yoloResults.map((r) => r['tag']).join(', ');
-
-    return Positioned(
-      top: 40, // Pindah ke atas (di bawah AppBar)
-      left: 10, // Pindah ke kiri
-      // Hapus 'right' agar tidak memanjang full screen
-      child: AnimatedOpacity(
-        opacity: yoloResults.isNotEmpty ? 1.0 : 0.0,
-        duration: const Duration(milliseconds: 300),
-        child: Container(
-          // Kecilkan padding
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), 
-          decoration: BoxDecoration(
-            color: Colors.green.withOpacity(0.9),
-            borderRadius: BorderRadius.circular(8), // Radius lebih kecil
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: 5, // Shadow lebih kecil
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white, size: 16), // Icon lebih kecil
-              const SizedBox(width: 6),
-              Text(
-                detectedTags.isEmpty
-                    ? "Mencari..."
-                    : "Terdeteksi: $detectedTags",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12, // Font lebih kecil
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDebugPanel() {
-    return Positioned(
-      bottom: 100,
-      left: 20,
-      right: 20,
-      child: Card(
-        color: Colors.black87,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "⚙️ DEBUG MODE",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                "Deteksi: ${yoloResults.length} | Frame: $_totalFrames | Total: $_detectionCount",
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-              const Divider(color: Colors.white30),
-              Row(
-                children: [
-                  const Text("Threshold:",
-                      style: TextStyle(color: Colors.white, fontSize: 12)),
-                  Expanded(
-                    child: Slider(
-                      value: displayConfThreshold,
-                      min: 0.1,
-                      max: 0.9,
-                      divisions: 16,
-                      activeColor: Colors.green,
-                      label: "${(displayConfThreshold * 100).toStringAsFixed(0)}%",
-                      onChanged: (v) =>
-                          setState(() => displayConfThreshold = v),
-                    ),
-                  ),
-                  Text(
-                    "${(displayConfThreshold * 100).toStringAsFixed(0)}%",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-              CheckboxListTile(
-                title: const Text(
-                  "Bypass Filters (Show All)",
-                  style: TextStyle(color: Colors.white, fontSize: 12),
-                ),
-                subtitle: const Text(
-                  "Tampilkan semua deteksi tanpa filter",
-                  style: TextStyle(color: Colors.white60, fontSize: 10),
-                ),
-                value: bypassFilters,
-                checkColor: Colors.black,
-                activeColor: Colors.white,
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                onChanged: (v) => setState(() => bypassFilters = v!),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
