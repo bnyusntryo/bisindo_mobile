@@ -408,6 +408,9 @@ class _DetectionPageState extends State<DetectionPage> {
     );
   }
 
+  // ==========================
+  // LOGIKA FIX DI SINI
+  // ==========================
   List<Widget> _buildBoxes(
       BoxConstraints constraints,
       double sensorW,
@@ -417,103 +420,58 @@ class _DetectionPageState extends State<DetectionPage> {
       double offsetY) {
     if (yoloResults.isEmpty) return [];
 
-    // DAPATKAN ORIENTASI DEVICE FISIK
-    final orientation = MediaQuery.of(context).orientation;
-    final isFrontCamera = cameras[selectedCameraIndex].lensDirection == 
+    final isFrontCamera = cameras[selectedCameraIndex].lensDirection ==
         CameraLensDirection.front;
 
     return yoloResults.map((det) {
       final box = det['box'];
       final tag = det['tag'];
 
-      // Koordinat awal dari model YOLO
+      // 1. Hitung Koordinat Normal (Tanpa peduli arah kamera dulu)
       double x1 = box[0] * scale + offsetX;
       double y1 = box[1] * scale + offsetY;
       double x2 = box[2] * scale + offsetX;
       double y2 = box[3] * scale + offsetY;
 
-      // TRANSFORMASI BERDASARKAN ORIENTASI + KAMERA DEPAN/BELAKANG
-      final screenWidth = constraints.maxWidth;
-      final screenHeight = constraints.maxHeight;
-
-      if (orientation == Orientation.landscape) {
-        // ========== LANDSCAPE MODE ==========
-        if (isFrontCamera) {
-          // Landscape dengan kamera depan
-          double tempX1 = x1;
-          double tempY1 = y1;
-          double tempX2 = x2;
-          double tempY2 = y2;
-          
-          // Rotasi 90 derajat + mirror
-          x1 = tempY1;
-          y1 = screenWidth - tempX2;
-          x2 = tempY2;
-          y2 = screenWidth - tempX1;
-        } else {
-          // Landscape dengan kamera belakang  
-          double tempX1 = x1;
-          double tempY1 = y1;
-          double tempX2 = x2;
-          double tempY2 = y2;
-          
-          // Rotasi 90 derajat
-          x1 = screenHeight - tempY2;
-          y1 = tempX1;
-          x2 = screenHeight - tempY1;
-          y2 = tempX2;
-        }
-      } else {
-        // ========== PORTRAIT MODE ==========
-        if (isFrontCamera) {
-          // Kamera depan: mirror horizontal
-          double screenCX = constraints.maxWidth / 2;
-          double dist1 = x1 - screenCX;
-          double dist2 = x2 - screenCX;
-          x1 = screenCX - dist1;
-          x2 = screenCX - dist2;
-          
-          // Tambahkan flip vertical untuk konsistensi
-          double screenCY = constraints.maxHeight / 2;
-          double distY1 = y1 - screenCY;
-          double distY2 = y2 - screenCY;
-          y1 = screenCY - distY1;
-          y2 = screenCY - distY2;
-        }
-        // Kamera belakang di portrait tidak perlu transformasi tambahan
+      // 2. LOGIC FIX: FLIP Y (ATAS-BAWAH) SAJA!
+      // Berdasarkan screenshot: X jangan dibalik, Y harus dibalik.
+      if (isFrontCamera) {
+        double oldY1 = y1; double oldY2 = y2;
+        // Balik Y relatif terhadap tinggi layar
+        y1 = constraints.maxHeight - oldY2;
+        y2 = constraints.maxHeight - oldY1;
+        
+        // X DIBIARKAN NORMAL (Karena kalau dibalik malah jadi mirror)
       }
 
-      // Pastikan koordinat konsisten (x1 < x2, y1 < y2)
-      if (x1 > x2) {
-        double temp = x1; x1 = x2; x2 = temp;
-      }
-      if (y1 > y2) {
-        double temp = y1; y1 = y2; y2 = temp;
-      }
+      // 3. Safety check urutan koordinat
+      double left = math.min(x1, x2);
+      double right = math.max(x1, x2);
+      double top = math.min(y1, y2);
+      double bottom = math.max(y1, y2);
 
       // Smoothing posisi box
       final smoothKey = tag;
       if (_prevDisplayBoxes.containsKey(smoothKey)) {
         final prev = _prevDisplayBoxes[smoothKey]!;
-        x1 = prev[0] + (x1 - prev[0]) * boxSmoothingAlpha;
-        y1 = prev[1] + (y1 - prev[1]) * boxSmoothingAlpha;
-        x2 = prev[2] + (x2 - prev[2]) * boxSmoothingAlpha;
-        y2 = prev[3] + (y2 - prev[3]) * boxSmoothingAlpha;
+        left = prev[0] + (left - prev[0]) * boxSmoothingAlpha;
+        top = prev[1] + (top - prev[1]) * boxSmoothingAlpha;
+        right = prev[2] + (right - prev[2]) * boxSmoothingAlpha;
+        bottom = prev[3] + (bottom - prev[3]) * boxSmoothingAlpha;
       }
-      _prevDisplayBoxes[smoothKey] = [x1, y1, x2, y2];
+      _prevDisplayBoxes[smoothKey] = [left, top, right, bottom];
 
-      double w = (x2 - x1).abs();
-      double h = (y2 - y1).abs();
+      double w = (right - left).abs();
+      double h = (bottom - top).abs();
       double conf = box[4];
 
-      // Warna berdasarkan confidence
       Color color = conf > 0.6
           ? Colors.green
           : (conf > 0.4 ? Colors.orange : Colors.red);
 
       return Positioned(
-        left: x1,
-        top: y1,
+        left: left,
+        top: top,
         width: w,
         height: h,
         child: Container(
