@@ -9,9 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  camera: ^0.10.5
+  # UPDATE PENTING: Naik versi camera biar akur sama flutter_vision
+  camera: ^0.11.3  
   image: ^3.3.0
-  flutter_vision: ^1.1.4
+  flutter_vision: ^2.0.0
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

@@ -1,18 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Diperlukan untuk mengatur orientasi layar
-import 'detection_page.dart'; // Pastikan file detection_page.dart ada di folder yang sama (lib/)
+import 'package:flutter/services.dart';
+import 'detection_page.dart';
 
 void main() async {
-  // 1. Wajib: Pastikan binding Flutter terinisialisasi sebelum akses plugin native (Kamera)
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 2. Opsional: Kunci orientasi layar ke Potrait agar tampilan kamera tidak gepeng/rusak
-  // Jika aplikasimu nanti butuh landscape, hapus bagian SystemChrome ini.
+  // PERBAIKAN: Izinkan Portrait DAN Landscape
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
   ]);
 
-  // 3. Jalankan Aplikasi
   runApp(const MyApp());
 }
 
@@ -22,19 +21,11 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      // Hilangkan banner "DEBUG" di pojok kanan atas
       debugShowCheckedModeBanner: false,
-
-      // Judul Aplikasi (tampil di Recent Apps)
       title: 'BISINDO Detector',
-
-      // Tema Aplikasi
       theme: ThemeData(
-        // Menggunakan Color Scheme Material 3
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueAccent),
         useMaterial3: true,
-
-        // Styling AppBar agar terlihat modern
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.blueAccent,
           foregroundColor: Colors.white,
@@ -42,8 +33,6 @@ class MyApp extends StatelessWidget {
           elevation: 2,
         ),
       ),
-
-      // Halaman Awal Langsung ke Deteksi
       home: const DetectionPage(),
     );
   }
