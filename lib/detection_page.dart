@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_vision/flutter_vision.dart';
 import 'dart:math' as math;
-import 'dart:typed_data'; // Wajib untuk manipulasi byte
 
 class DetectionPage extends StatefulWidget {
   const DetectionPage({super.key});
@@ -17,7 +16,6 @@ class _DetectionPageState extends State<DetectionPage> {
 
   List<CameraDescription> cameras = [];
   int selectedCameraIndex = 0;
-  CameraImage? latestImage;
 
   bool isLoaded = false;
   bool isDetecting = false;
@@ -28,26 +26,30 @@ class _DetectionPageState extends State<DetectionPage> {
   // === SMOOTHING & STABILIZATION ===
   final Map<String, List<double>> _prevDisplayBoxes = {};
   final Map<String, List<double>> _confidenceHistory = {};
-  final int _confidenceHistorySize = 5;
+  final int _confidenceHistorySize = 3;
   final Map<String, int> _classFrameCount = {};
 
   Map<String, dynamic>? _prevBestDetection;
   int _framesSinceLastDetection = 0;
 
   // === CONFIGURABLE PARAMETERS ===
-  // Threshold untuk Int8 biasanya perlu disesuaikan, kita mulai moderat
-  double modelConfThreshold = 0.25;
-  double modelIouThreshold = 0.45;
-  double displayConfThreshold = 0.40;
+  double modelConfThreshold = 0.20;
+  double modelIouThreshold = 0.40;
+  double modelClassThreshold = 0.20;
+  double displayConfThreshold = 0.25;
   
-  double boxSmoothingAlpha = 0.6;
+  double boxSmoothingAlpha = 0.7;
   
-  final int _minDetectionFrames = 2;
-  final int _maxFramesWithoutDetection = 5;
+  final int _minDetectionFrames = 1;
+  final int _maxFramesWithoutDetection = 3;
   
   bool forceFrontCamera = true;
   bool debugMode = true;
   bool bypassFilters = false;
+
+  // Tracking untuk debug
+  int _totalFrames = 0;
+  int _detectionCount = 0;
 
   @override
   void initState() {
@@ -63,7 +65,7 @@ class _DetectionPageState extends State<DetectionPage> {
       await initializeCamera();
       setState(() => isLoaded = true);
     } catch (e) {
-      debugPrint("Error init: $e");
+      debugPrint("❌ Error init: $e");
     }
   }
 
@@ -74,16 +76,16 @@ class _DetectionPageState extends State<DetectionPage> {
     super.dispose();
   }
 
-Future<void> loadYoloModel() async {
+  Future<void> loadYoloModel() async {
     await vision.loadYoloModel(
       labels: "assets/labels.txt",
-      modelPath: "assets/best_float16.tflite", // BALIK KE FLOAT16
-      quantization: false, // WAJIB FALSE UNTUK FLOAT
+      modelPath: "assets/best_float16.tflite",
+      quantization: false,
       modelVersion: "yolov8",
       numThreads: 4,
       useGpu: false,
     );
-    debugPrint("✓ Model loaded successfully (Mode: YOLOv8 Float16)");
+    debugPrint("✓ Model loaded successfully (YOLOv8 Float16)");
   }
 
   Future<void> initializeCamera() async {
@@ -99,7 +101,7 @@ Future<void> loadYoloModel() async {
 
     controller = CameraController(
       cameras[selectedCameraIndex],
-      ResolutionPreset.medium,
+      ResolutionPreset.high,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
@@ -129,17 +131,20 @@ Future<void> loadYoloModel() async {
     if (controller!.value.isStreamingImages) return;
 
     isDetecting = true;
+    _totalFrames = 0;
+    _detectionCount = 0;
     setState(() {});
 
     await controller!.startImageStream((image) async {
-      latestImage = image;
       if (isBusy || !isDetecting) return;
 
       isBusy = true;
+      _totalFrames++;
+      
       try {
         await runYolo(image);
       } catch (e) {
-        debugPrint("Error detection: $e");
+        debugPrint("❌ Error detection: $e");
       } finally {
         isBusy = false;
       }
@@ -156,39 +161,8 @@ Future<void> loadYoloModel() async {
     _prevDisplayBoxes.clear();
     _confidenceHistory.clear();
     _classFrameCount.clear();
-  }
-
-  // FUNGSI PEMBERSIH GAMBAR (WAJIB ADA)
-  List<Uint8List> _processCameraImage(CameraImage image) {
-    final planes = image.planes;
-    final width = image.width;
-    final height = image.height;
-
-    Uint8List yBytes;
-    final yPlane = planes[0];
     
-    if (yPlane.bytesPerRow == width) {
-      yBytes = yPlane.bytes;
-    } else {
-      int totalBytes = width * height;
-      yBytes = Uint8List(totalBytes);
-      
-      for (int i = 0; i < height; i++) {
-        int srcOffset = i * yPlane.bytesPerRow;
-        int dstOffset = i * width;
-        yBytes.setRange(
-          dstOffset, 
-          dstOffset + width, 
-          yPlane.bytes.getRange(srcOffset, srcOffset + width)
-        );
-      }
-    }
-
-    return [
-      yBytes,
-      planes[1].bytes,
-      planes[2].bytes,
-    ];
+    debugPrint("📊 Session Stats: $_detectionCount detections in $_totalFrames frames");
   }
 
   double _toDouble(dynamic value) {
@@ -211,20 +185,16 @@ Future<void> loadYoloModel() async {
   }
 
   Future<void> runYolo(CameraImage image) async {
-    // 1. Bersihkan gambar dari padding
-    final cleanBytesList = _processCameraImage(image);
-
-    // 2. Jalankan Model (Int8)
     final result = await vision.yoloOnFrame(
-      bytesList: cleanBytesList,
+      bytesList: image.planes.map((p) => p.bytes).toList(),
       imageHeight: image.height,
       imageWidth: image.width,
       iouThreshold: modelIouThreshold,
       confThreshold: modelConfThreshold,
-      classThreshold: modelConfThreshold,
+      classThreshold: modelClassThreshold,
     );
 
-    // 3. Handle Hasil Kosong
+    // Handle empty result
     if (result.isEmpty) {
       _framesSinceLastDetection++;
       if (_framesSinceLastDetection < _maxFramesWithoutDetection &&
@@ -237,20 +207,27 @@ Future<void> loadYoloModel() async {
     }
 
     _framesSinceLastDetection = 0;
+    _detectionCount++;
+    
+    // Debug log setiap deteksi
+    if (_detectionCount % 10 == 0) {
+      debugPrint("🎯 Detection #$_detectionCount: ${result.length} objects");
+    }
+
     List<Map<String, dynamic>> validDetections = [];
 
-    // 4. Filtering & Smoothing
     for (var r in result) {
       final box = r["box"];
       final tag = r["tag"];
       final rawConf = _toDouble(box[4]);
 
+      // BYPASS MODE: Tampilkan semua!
       if (bypassFilters) {
         validDetections.add(r);
         continue;
       }
 
-      // Filter ukuran (buang yang terlalu kecil/besar aneh)
+      // Filter 1: Ukuran box (buang yang terlalu kecil/besar)
       double w = (box[2] - box[0]).abs();
       double h = (box[3] - box[1]).abs();
       double imgArea = (image.width * image.height).toDouble();
@@ -258,7 +235,7 @@ Future<void> loadYoloModel() async {
 
       if (ratio < 0.01 || ratio > 0.95) continue;
 
-      // Smoothing Confidence
+      // Filter 2: Smoothing Confidence (rata-rata 3 frame terakhir)
       _confidenceHistory[tag] = _confidenceHistory[tag] ?? [];
       _confidenceHistory[tag]!.add(rawConf);
       if (_confidenceHistory[tag]!.length > _confidenceHistorySize) {
@@ -270,7 +247,7 @@ Future<void> loadYoloModel() async {
 
       if (smoothedConf < displayConfThreshold) continue;
 
-      // Stability check
+      // Filter 3: Stability check (harus muncul minimal N frame)
       _classFrameCount[tag] = (_classFrameCount[tag] ?? 0) + 1;
       if (_classFrameCount[tag]! < _minDetectionFrames) continue;
 
@@ -284,15 +261,16 @@ Future<void> loadYoloModel() async {
       });
     }
 
-    _classFrameCount
-        .removeWhere((key, value) => !validDetections.any((d) => d['tag'] == key));
+    // Clean up frame count untuk class yang tidak terdeteksi
+    _classFrameCount.removeWhere(
+        (key, value) => !validDetections.any((d) => d['tag'] == key));
 
     if (validDetections.isEmpty) {
-      setState(() => yoloResults = []);
+      if (mounted) setState(() => yoloResults = []);
       return;
     }
 
-    // 5. NMS Manual (Buang kotak duplikat)
+    // NMS: Buang box yang overlap
     validDetections.sort((a, b) => b['box'][4].compareTo(a['box'][4]));
     List<Map<String, dynamic>> nmsResults = [];
     
@@ -307,6 +285,7 @@ Future<void> loadYoloModel() async {
       if (!overlap) nmsResults.add(det);
     }
 
+    // Simpan deteksi terbaik
     if (nmsResults.isNotEmpty) {
       _prevBestDetection = nmsResults.first;
     }
@@ -321,7 +300,18 @@ Future<void> loadYoloModel() async {
   @override
   Widget build(BuildContext context) {
     if (!isLoaded || controller == null || !controller!.value.isInitialized) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 20),
+              Text("Loading model..."),
+            ],
+          ),
+        ),
+      );
     }
 
     return Scaffold(
@@ -354,41 +344,54 @@ Future<void> loadYoloModel() async {
             sensorH = previewSize.height;
           }
 
-          double scale = 1.0;
-          // Scale logic: Cover (Full screen)
-          scale = constraints.maxWidth / sensorW;
-          if (sensorH * scale < constraints.maxHeight) {
-            scale = constraints.maxHeight / sensorH;
-          }
+          // Full screen logic
+          double scaleX = constraints.maxWidth / sensorW;
+          double scaleY = constraints.maxHeight / sensorH;
+          double finalScale = math.max(scaleX, scaleY);
+
+          double scaledPreviewW = sensorW * finalScale;
+          double scaledPreviewH = sensorH * finalScale;
+
+          double offsetX = (constraints.maxWidth - scaledPreviewW) / 2;
+          double offsetY = (constraints.maxHeight - scaledPreviewH) / 2;
 
           return Stack(
+            fit: StackFit.expand,
             children: [
-              // KAMERA LAYER
+              // LAYER 1: KAMERA
               Center(
-                child: Transform.scale(
-                  scale: scale,
-                  child: AspectRatio(
-                    aspectRatio: isPortrait
-                        ? 1 / controller!.value.aspectRatio
-                        : controller!.value.aspectRatio,
+                child: OverflowBox(
+                  maxWidth: scaledPreviewW,
+                  maxHeight: scaledPreviewH,
+                  minWidth: scaledPreviewW,
+                  minHeight: scaledPreviewH,
+                  child: SizedBox(
+                    width: scaledPreviewW,
+                    height: scaledPreviewH,
                     child: CameraPreview(controller!),
                   ),
                 ),
               ),
 
-              // BOX LAYER
+              // LAYER 2: BOX DETEKSI
               Positioned.fill(
                 child: Stack(
-                  children: _buildBoxes(constraints, sensorW, sensorH, scale),
+                  children: _buildBoxes(
+                      constraints, sensorW, sensorH, finalScale, offsetX, offsetY),
                 ),
               ),
 
-              // DEBUG LAYER
+              // LAYER 3: STATUS INDICATOR
+              _buildStatusIndicator(),
+
+              // LAYER 4: DEBUG PANEL
               if (debugMode) _buildDebugPanel(),
 
-              // BUTTON LAYER
+              // LAYER 5: TOMBOL START
               Positioned(
-                bottom: 30, left: 0, right: 0,
+                bottom: 30,
+                left: 0,
+                right: 0,
                 child: Center(
                   child: FloatingActionButton.extended(
                     onPressed: isDetecting ? stopDetection : startDetection,
@@ -406,37 +409,89 @@ Future<void> loadYoloModel() async {
   }
 
   List<Widget> _buildBoxes(
-      BoxConstraints constraints, double sensorW, double sensorH, double scale) {
+      BoxConstraints constraints,
+      double sensorW,
+      double sensorH,
+      double scale,
+      double offsetX,
+      double offsetY) {
     if (yoloResults.isEmpty) return [];
 
-    double previewW = sensorW * scale;
-    double previewH = sensorH * scale;
-    
-    // Center the preview area
-    double offsetX = (constraints.maxWidth - previewW) / 2;
-    double offsetY = (constraints.maxHeight - previewH) / 2;
+    // DAPATKAN ORIENTASI DEVICE FISIK
+    final orientation = MediaQuery.of(context).orientation;
+    final isFrontCamera = cameras[selectedCameraIndex].lensDirection == 
+        CameraLensDirection.front;
 
     return yoloResults.map((det) {
       final box = det['box'];
-      
-      // Transformasi koordinat
+      final tag = det['tag'];
+
+      // Koordinat awal dari model YOLO
       double x1 = box[0] * scale + offsetX;
       double y1 = box[1] * scale + offsetY;
       double x2 = box[2] * scale + offsetX;
       double y2 = box[3] * scale + offsetY;
 
-      // Mirroring untuk kamera depan
-      if (cameras[selectedCameraIndex].lensDirection ==
-          CameraLensDirection.front) {
-        double screenCX = constraints.maxWidth / 2;
-        x1 = screenCX + (screenCX - x1);
-        x2 = screenCX + (screenCX - x2);
-        // Swap x1 & x2
+      // TRANSFORMASI BERDASARKAN ORIENTASI + KAMERA DEPAN/BELAKANG
+      final screenWidth = constraints.maxWidth;
+      final screenHeight = constraints.maxHeight;
+
+      if (orientation == Orientation.landscape) {
+        // ========== LANDSCAPE MODE ==========
+        if (isFrontCamera) {
+          // Landscape dengan kamera depan
+          double tempX1 = x1;
+          double tempY1 = y1;
+          double tempX2 = x2;
+          double tempY2 = y2;
+          
+          // Rotasi 90 derajat + mirror
+          x1 = tempY1;
+          y1 = screenWidth - tempX2;
+          x2 = tempY2;
+          y2 = screenWidth - tempX1;
+        } else {
+          // Landscape dengan kamera belakang  
+          double tempX1 = x1;
+          double tempY1 = y1;
+          double tempX2 = x2;
+          double tempY2 = y2;
+          
+          // Rotasi 90 derajat
+          x1 = screenHeight - tempY2;
+          y1 = tempX1;
+          x2 = screenHeight - tempY1;
+          y2 = tempX2;
+        }
+      } else {
+        // ========== PORTRAIT MODE ==========
+        if (isFrontCamera) {
+          // Kamera depan: mirror horizontal
+          double screenCX = constraints.maxWidth / 2;
+          double dist1 = x1 - screenCX;
+          double dist2 = x2 - screenCX;
+          x1 = screenCX - dist1;
+          x2 = screenCX - dist2;
+          
+          // Tambahkan flip vertical untuk konsistensi
+          double screenCY = constraints.maxHeight / 2;
+          double distY1 = y1 - screenCY;
+          double distY2 = y2 - screenCY;
+          y1 = screenCY - distY1;
+          y2 = screenCY - distY2;
+        }
+        // Kamera belakang di portrait tidak perlu transformasi tambahan
+      }
+
+      // Pastikan koordinat konsisten (x1 < x2, y1 < y2)
+      if (x1 > x2) {
         double temp = x1; x1 = x2; x2 = temp;
+      }
+      if (y1 > y2) {
+        double temp = y1; y1 = y2; y2 = temp;
       }
 
       // Smoothing posisi box
-      final tag = det['tag'];
       final smoothKey = tag;
       if (_prevDisplayBoxes.containsKey(smoothKey)) {
         final prev = _prevDisplayBoxes[smoothKey]!;
@@ -451,10 +506,16 @@ Future<void> loadYoloModel() async {
       double h = (y2 - y1).abs();
       double conf = box[4];
 
-      Color color = conf > 0.6 ? Colors.green : (conf > 0.4 ? Colors.orange : Colors.red);
+      // Warna berdasarkan confidence
+      Color color = conf > 0.6
+          ? Colors.green
+          : (conf > 0.4 ? Colors.orange : Colors.red);
 
       return Positioned(
-        left: x1, top: y1, width: w, height: h,
+        left: x1,
+        top: y1,
+        width: w,
+        height: h,
         child: Container(
           decoration: BoxDecoration(
             border: Border.all(color: color, width: 3),
@@ -464,11 +525,14 @@ Future<void> loadYoloModel() async {
             alignment: Alignment.topLeft,
             child: Container(
               color: color,
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
               child: Text(
                 "$tag ${(conf * 100).toStringAsFixed(0)}%",
                 style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
               ),
             ),
           ),
@@ -477,55 +541,118 @@ Future<void> loadYoloModel() async {
     }).toList();
   }
 
+  Widget _buildStatusIndicator() {
+    return Positioned(
+      top: 100,
+      left: 20,
+      right: 20,
+      child: AnimatedOpacity(
+        opacity: yoloResults.isNotEmpty ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 300),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.9),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 10,
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.check_circle, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                yoloResults.isEmpty
+                    ? ""
+                    : "Terdeteksi: ${yoloResults.map((r) => r['tag']).join(', ')}",
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildDebugPanel() {
     return Positioned(
-      bottom: 100, left: 20, right: 20,
+      bottom: 100,
+      left: 20,
+      right: 20,
       child: Card(
         color: Colors.black87,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("⚙️ DEBUG (Int8) | Deteksi: ${yoloResults.length}", 
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              Text(
+                "⚙️ DEBUG MODE",
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "Deteksi: ${yoloResults.length} | Frame: $_totalFrames | Total: $_detectionCount",
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const Divider(color: Colors.white30),
               Row(
                 children: [
-                  const Text("Conf:", style: TextStyle(color: Colors.white)),
+                  const Text("Threshold:",
+                      style: TextStyle(color: Colors.white, fontSize: 12)),
                   Expanded(
                     child: Slider(
                       value: displayConfThreshold,
-                      min: 0.1, max: 0.9,
+                      min: 0.1,
+                      max: 0.9,
+                      divisions: 16,
                       activeColor: Colors.green,
-                      onChanged: (v) => setState(() => displayConfThreshold = v),
+                      label: "${(displayConfThreshold * 100).toStringAsFixed(0)}%",
+                      onChanged: (v) =>
+                          setState(() => displayConfThreshold = v),
                     ),
                   ),
-                  Text(displayConfThreshold.toStringAsFixed(2), 
-                      style: const TextStyle(color: Colors.white)),
-                ],
-              ),
-              Row(
-                children: [
-                  const Text("IOU:", style: TextStyle(color: Colors.white)),
-                  Expanded(
-                    child: Slider(
-                      value: modelIouThreshold,
-                      min: 0.1, max: 0.9,
-                      activeColor: Colors.orange,
-                      onChanged: (v) => setState(() => modelIouThreshold = v),
+                  Text(
+                    "${(displayConfThreshold * 100).toStringAsFixed(0)}%",
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
                     ),
                   ),
-                  Text(modelIouThreshold.toStringAsFixed(2), 
-                      style: const TextStyle(color: Colors.white)),
                 ],
               ),
               CheckboxListTile(
-                title: const Text("Bypass Filters", style: TextStyle(color: Colors.white)),
+                title: const Text(
+                  "Bypass Filters (Show All)",
+                  style: TextStyle(color: Colors.white, fontSize: 12),
+                ),
+                subtitle: const Text(
+                  "Tampilkan semua deteksi tanpa filter",
+                  style: TextStyle(color: Colors.white60, fontSize: 10),
+                ),
                 value: bypassFilters,
                 checkColor: Colors.black,
                 activeColor: Colors.white,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
                 onChanged: (v) => setState(() => bypassFilters = v!),
-              )
+              ),
             ],
           ),
         ),
