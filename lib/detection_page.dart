@@ -381,7 +381,7 @@ class _DetectionPageState extends State<DetectionPage> {
                 ),
               ),
 
-              // LAYER 3: STATUS INDICATOR
+              // LAYER 3: STATUS INDICATOR (DIUBAH)
               _buildStatusIndicator(),
 
               // LAYER 4: DEBUG PANEL
@@ -408,9 +408,6 @@ class _DetectionPageState extends State<DetectionPage> {
     );
   }
 
-  // ==========================
-  // LOGIKA FIX DI SINI
-  // ==========================
   List<Widget> _buildBoxes(
       BoxConstraints constraints,
       double sensorW,
@@ -420,12 +417,13 @@ class _DetectionPageState extends State<DetectionPage> {
       double offsetY) {
     if (yoloResults.isEmpty) return [];
 
-    final isFrontCamera = cameras[selectedCameraIndex].lensDirection ==
+    final isFrontCamera = cameras[selectedCameraIndex].lensDirection == 
         CameraLensDirection.front;
 
     return yoloResults.map((det) {
       final box = det['box'];
       final tag = det['tag'];
+      final conf = box[4];
 
       // 1. Hitung Koordinat Normal (Tanpa peduli arah kamera dulu)
       double x1 = box[0] * scale + offsetX;
@@ -434,14 +432,11 @@ class _DetectionPageState extends State<DetectionPage> {
       double y2 = box[3] * scale + offsetY;
 
       // 2. LOGIC FIX: FLIP Y (ATAS-BAWAH) SAJA!
-      // Berdasarkan screenshot: X jangan dibalik, Y harus dibalik.
       if (isFrontCamera) {
         double oldY1 = y1; double oldY2 = y2;
         // Balik Y relatif terhadap tinggi layar
         y1 = constraints.maxHeight - oldY2;
         y2 = constraints.maxHeight - oldY1;
-        
-        // X DIBIARKAN NORMAL (Karena kalau dibalik malah jadi mirror)
       }
 
       // 3. Safety check urutan koordinat
@@ -463,7 +458,6 @@ class _DetectionPageState extends State<DetectionPage> {
 
       double w = (right - left).abs();
       double h = (bottom - top).abs();
-      double conf = box[4];
 
       Color color = conf > 0.6
           ? Colors.green
@@ -500,39 +494,42 @@ class _DetectionPageState extends State<DetectionPage> {
   }
 
   Widget _buildStatusIndicator() {
+    // Hanya ambil satu hasil deteksi untuk ditampilkan di status bar
+    final detectedTags = yoloResults.map((r) => r['tag']).join(', ');
+
     return Positioned(
-      top: 100,
-      left: 20,
-      right: 20,
+      top: 40, // Pindah ke atas (di bawah AppBar)
+      left: 10, // Pindah ke kiri
+      // Hapus 'right' agar tidak memanjang full screen
       child: AnimatedOpacity(
         opacity: yoloResults.isNotEmpty ? 1.0 : 0.0,
         duration: const Duration(milliseconds: 300),
         child: Container(
-          padding: const EdgeInsets.all(12),
+          // Kecilkan padding
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), 
           decoration: BoxDecoration(
             color: Colors.green.withOpacity(0.9),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(8), // Radius lebih kecil
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.3),
-                blurRadius: 10,
+                blurRadius: 5, // Shadow lebih kecil
               ),
             ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.check_circle, color: Colors.white, size: 20),
-              const SizedBox(width: 8),
+              const Icon(Icons.check_circle, color: Colors.white, size: 16), // Icon lebih kecil
+              const SizedBox(width: 6),
               Text(
-                yoloResults.isEmpty
-                    ? ""
-                    : "Terdeteksi: ${yoloResults.map((r) => r['tag']).join(', ')}",
+                detectedTags.isEmpty
+                    ? "Mencari..."
+                    : "Terdeteksi: $detectedTags",
                 style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
-                  fontSize: 14,
+                  fontSize: 12, // Font lebih kecil
                 ),
               ),
             ],
