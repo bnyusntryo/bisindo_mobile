@@ -24,5 +24,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/best_float16.tflite
+    - assets/best_float32.tflite
+    - assets/best_float32_V2.tflite
     - assets/best_int8.tflite
     - assets/labels.txt
