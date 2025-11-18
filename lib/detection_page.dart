@@ -105,7 +105,7 @@ class _DetectionPageState extends State<DetectionPage> {
 
     controller = CameraController(
       cameras[selectedCameraIndex],
-      ResolutionPreset.medium,
+      ResolutionPreset.high,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
