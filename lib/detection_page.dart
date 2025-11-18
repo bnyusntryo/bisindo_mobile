@@ -32,7 +32,7 @@ class _DetectionPageState extends State<DetectionPage> {
   // final int _requiredStableFrames = 3; // need 3 consecutive frames to accept
 
   // === CONFIGURABLE PARAMETERS ===
-  double modelConfThreshold = 0.30; // model filter (used when reading results)
+  double modelConfThreshold = 0.20; // model filter (used when reading results)
   double modelIouThreshold = 0.45;
   double modelClassThreshold = 0.30;
 
