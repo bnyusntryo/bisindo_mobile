@@ -27,4 +27,5 @@ flutter:
     - assets/best_float32.tflite
     - assets/best_float32_V2.tflite
     - assets/best_int8.tflite
+    - assets/abjad.jfif
     - assets/labels.txt
