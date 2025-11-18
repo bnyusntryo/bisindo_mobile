@@ -27,12 +27,12 @@ class _DetectionPageState extends State<DetectionPage> {
   List<Map<String, dynamic>> yoloResults = [];
 
   // === SIMPLE TEMPORAL STABILIZER ===
-  // String? _lastStableTag;
-  // int _stableFrameCount = 0;
-  // final int _requiredStableFrames = 3; // need 3 consecutive frames to accept
+  String? _lastStableTag;
+  int _stableFrameCount = 0;
+  final int _requiredStableFrames = 3; // need 3 consecutive frames to accept
 
   // === CONFIGURABLE PARAMETERS ===
-  double modelConfThreshold = 0.30; // model filter (used when reading results)
+  double modelConfThreshold = 0.20; // model filter (used when reading results)
   double modelIouThreshold = 0.45;
   double modelClassThreshold = 0.30;
 
@@ -45,10 +45,6 @@ class _DetectionPageState extends State<DetectionPage> {
 
   final List<String> singleLetters = const [
     'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'
-  ];
-  // TAMBAHKAN DAFTAR INI
-  final List<String> bisindoWords = const [
-    'Aku','Apa','Ayah','Baik','Bantu','Bermain','Dia','Jangan','Kakak','Kamu','Kapan','Keren','Kerja','Maaf','Marah','Minum','Rumah','Sabar','Sedih','Senang','Suka'
   ];
 
   @override
@@ -78,7 +74,7 @@ class _DetectionPageState extends State<DetectionPage> {
     try {
       await vision.loadYoloModel(
         labels: "assets/labels.txt",
-        modelPath: "assets/best_float32_V2.tflite",
+        modelPath: "assets/best_float32_abjad.tflite",
         quantization: false,
         modelVersion: "yolov8",
         numThreads: 4,
@@ -105,7 +101,7 @@ class _DetectionPageState extends State<DetectionPage> {
 
     controller = CameraController(
       cameras[selectedCameraIndex],
-      ResolutionPreset.medium,
+      ResolutionPreset.low,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
@@ -134,7 +130,9 @@ class _DetectionPageState extends State<DetectionPage> {
     selectedCameraIndex = (selectedCameraIndex + 1) % cameras.length;
     await initializeCamera();
 
-    // reset state
+    // reset stabilizer state
+    _lastStableTag = null;
+    _stableFrameCount = 0;
     yoloResults.clear();
 
     if (wasDetecting) {
@@ -183,6 +181,8 @@ class _DetectionPageState extends State<DetectionPage> {
     }
 
     yoloResults.clear();
+    _lastStableTag = null;
+    _stableFrameCount = 0;
   }
 
   double _toDouble(dynamic v) {
@@ -198,9 +198,9 @@ class _DetectionPageState extends State<DetectionPage> {
       bytesList: image.planes.map((p) => p.bytes).toList(),
       imageHeight: image.height,
       imageWidth: image.width,
-      iouThreshold: modelIouThreshold,
-      confThreshold: modelConfThreshold,
-      classThreshold: modelClassThreshold,
+      iouThreshold: modelIouThreshold, // Anda bisa naikkan ini ke 0.45 jika mau
+      confThreshold: modelConfThreshold, // Anda bisa naikkan ini ke 0.30 jika mau
+      classThreshold: modelClassThreshold, // Anda bisa naikkan ini ke 0.30 jika mau
     );
 
     if (debugMode) {
@@ -211,65 +211,63 @@ class _DetectionPageState extends State<DetectionPage> {
     }
 
     if (result.isEmpty) {
-      // Tidak ada deteksi, bersihkan layar
+      // Tidak ada deteksi, bersihkan hasil
       if (yoloResults.isNotEmpty) {
         setState(() => yoloResults = []);
       }
       return;
     }
 
-    // === FILTER BARU: HANYA PAKAI SLIDER ===
-    List<Map<String, dynamic>> validDetections = [];
-
-    for (var r in result) {
+    // Keep only single-letter A-Z predictions
+    List<Map<String, dynamic>> cleaned = result.where((r) {
       final tag = (r['tag'] ?? '').toString().trim();
-      final box = r['box'];
-      final conf = _toDouble(box[4]);
+      return tag.length == 1 && RegExp(r'^[A-Z]$').hasMatch(tag);
+    }).toList();
 
-      // Tentukan tipe kelas
-      bool isWord = bisindoWords.contains(tag);
-      bool isLetter = singleLetters.contains(tag);
-
-      // 1. Jika bukan kata atau huruf yang dikenal, buang
-      if (!isWord && !isLetter) continue;
-
-      // 2. HANYA filter berdasarkan slider
-      if (conf < displayConfThreshold && !bypassFilters) {
-        if (debugMode) print("  ⚠️ $tag: conf ${(conf * 100).toStringAsFixed(1)}% DIBAWAH threshold ($displayConfThreshold)");
-        continue;
-      }
-
-      // 3. Lolos! Tambahkan ke daftar
-      validDetections.add({
-        'tag': tag,
-        'box': box, // Simpan box mentah
-        'conf': conf, // Simpan conf yang sudah di-parse
-      });
-    }
-    // === AKHIR FILTER ===
-
-
-    if (validDetections.isEmpty) {
-      // Tidak ada yang lolos filter, bersihkan layar
+    if (cleaned.isEmpty) {
+      // Tidak ada huruf A-Z yang terdeteksi, bersihkan hasil
       if (yoloResults.isNotEmpty) {
         setState(() => yoloResults = []);
       }
       return;
     }
 
-    // Pilih confidence tertinggi DARI YANG SUDAH LOLOS FILTER
-    validDetections.sort((a, b) => b['conf'].compareTo(a['conf']));
-    final best = validDetections.first;
-    final bestTag = best['tag'];
+    // Choose highest confidence prediction
+    cleaned.sort((a, b) => _toDouble(b['box'][4]).compareTo(_toDouble(a['box'][4])));
+    final best = cleaned.first;
+    final bestTag = (best['tag'] ?? '').toString().trim();
+    final bestConf = _toDouble(best['box'][4]);
 
     if (debugMode) {
-      print("Best filtered: $bestTag (${(best['conf'] * 100).toStringAsFixed(1)}%)");
+      print("Best raw: $bestTag (${(bestConf * 100).toStringAsFixed(1)}%)");
     }
 
-    // === MODE INSTAN: LANGSUNG TAMPILKAN ===
+    // === PERBAIKAN: HAPUS LOGIKA STABILIZER ===
+
+    // Filter cepat dengan confidence dari slider
+    if (bestConf < displayConfThreshold && !bypassFilters) {
+      // Tidak cukup percaya diri, bersihkan hasil
+      if (yoloResults.isNotEmpty) {
+        setState(() => yoloResults = []);
+      }
+      return;
+    }
+
+    // Lolos filter! Langsung tampilkan (Mode Instan)
     if (!mounted) return;
     setState(() {
-      yoloResults = [best]; // 'best' sudah berisi 'tag' dan 'box'
+      yoloResults = [
+        {
+          'tag': bestTag,
+          'box': [
+            _toDouble(best['box'][0]),
+            _toDouble(best['box'][1]),
+            _toDouble(best['box'][2]),
+            _toDouble(best['box'][3]),
+            bestConf,
+          ],
+        }
+      ];
     });
   }
 
@@ -473,24 +471,19 @@ class _DetectionPageState extends State<DetectionPage> {
   Widget _buildClassificationDisplay() {
     if (yoloResults.isEmpty) return const SizedBox.shrink();
 
-    // Ambil data dari yoloResults
+    // Only letters allowed here
     final Map<String, dynamic> best = yoloResults.first;
     final String tag = (best['tag'] ?? '?').toString();
-    // Ambil confidence dari 'box' (sesuai format flutter_vision) atau 'conf' jika ada
-    final double confidence = best.containsKey('conf')
-        ? _toDouble(best['conf'])
-        : _toDouble(best['box'][4]);
+    final double confidence = _toDouble(best['box'][4]);
 
-    // Tentukan tipe
-    final bool isWord = bisindoWords.contains(tag);
+    // Determine appearance for letters
     final bool isLetter = singleLetters.contains(tag);
 
-    // Tentukan Tampilan
-    final Color primaryColor = isWord ? Colors.blue : (isLetter ? Colors.green : Colors.purple);
-    final IconData icon = isWord ? Icons.gesture : (isLetter ? Icons.abc : Icons.help_outline);
-    final String typeLabel = isWord ? "KATA" : (isLetter ? "HURUF" : "UNKNOWN");
+    final Color primaryColor = isLetter ? Colors.green : Colors.purple;
+    final IconData icon = isLetter ? Icons.abc : Icons.help_outline;
+    final String typeLabel = isLetter ? "HURUF" : "UNKNOWN";
 
-    // Safety clamp untuk confidence
+    // Safety clamp for confidence
     final double confClamped = confidence.clamp(0.0, 1.0);
 
     return Positioned(
@@ -568,6 +561,25 @@ class _DetectionPageState extends State<DetectionPage> {
                 ),
               ],
             ),
+
+            // Additional detections (not used, but kept for future)
+            if (yoloResults.length > 1) ...[
+              const SizedBox(height: 16),
+              const Divider(),
+              Text("Other Detections:", style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: yoloResults.skip(1).take(3).map((det) {
+                  String tag = det['tag'] ?? "";
+                  double conf = _toDouble(det['box'][4]);
+                  return Chip(
+                    label: Text("$tag ${(conf * 100).toStringAsFixed(0)}%", style: const TextStyle(fontSize: 11)),
+                    backgroundColor: Colors.grey[100],
+                  );
+                }).toList(),
+              ),
+            ],
           ],
         ),
       ),
