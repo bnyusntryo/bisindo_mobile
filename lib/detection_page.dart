@@ -23,36 +23,33 @@ class _DetectionPageState extends State<DetectionPage> {
 
   List<Map<String, dynamic>> yoloResults = [];
 
-  // === SMOOTHING & STABILIZATION (LOGIC TIDAK DIUBAH) ===
+  // === SMOOTHING & STABILIZATION ===
   final Map<String, List<double>> _prevDisplayBoxes = {};
   final Map<String, List<double>> _confidenceHistory = {};
-  final int _confidenceHistorySize = 3;
+  final int _confidenceHistorySize = 5; // Naik dikit biar stabil
   final Map<String, int> _classFrameCount = {};
 
   Map<String, dynamic>? _prevBestDetection;
   int _framesSinceLastDetection = 0;
 
-  // === CONFIGURABLE PARAMETERS ===
-  // UBAH BAGIAN INI UNTUK VALIDASI > 50%
-  double modelConfThreshold = 0.40; // <--- Naikkan agar model lebih selektif di awal
+  // === CONFIGURABLE PARAMETERS (TUNED) ===
+  double modelConfThreshold = 0.15; // TURUNIN BIAR HURUF KECIL MASUK
   double modelIouThreshold = 0.40;
-  double modelClassThreshold = 0.40;
-  double displayConfThreshold = 0.50; // <--- VALIDASI UTAMA: Hanya terima jika > 50%
+  double modelClassThreshold = 0.15; // TURUNIN JUGA
+  double displayConfThreshold = 0.45; // FILTER TAMPILAN
 
   double boxSmoothingAlpha = 0.7;
-
-  final int _minDetectionFrames = 1;
+  final int _minDetectionFrames = 2;
   final int _maxFramesWithoutDetection = 3;
 
   bool forceFrontCamera = true;
   bool debugMode = false;
   bool bypassFilters = false;
 
-  // Tracking untuk debug
+  // Tracking
   int _totalFrames = 0;
   int _detectionCount = 0;
 
-  // Warna Aksen Utama (Konsisten dengan main.dart)
   static const Color primaryTeal = Color(0xFF004D40);
 
   @override
@@ -68,7 +65,7 @@ class _DetectionPageState extends State<DetectionPage> {
     super.dispose();
   }
 
-  // --- LOGIC FUNCTIONS (TIDAK DIUBAH) ---
+  // --- LOGIC FUNCTIONS ---
   Future<void> init() async {
     try {
       cameras = await availableCameras();
@@ -195,11 +192,10 @@ class _DetectionPageState extends State<DetectionPage> {
       imageHeight: image.height,
       imageWidth: image.width,
       iouThreshold: modelIouThreshold,
-      confThreshold: modelConfThreshold,
+      confThreshold: modelConfThreshold, // LOW THRESHOLD
       classThreshold: modelClassThreshold,
     );
 
-    // Handle empty result
     if (result.isEmpty) {
       _framesSinceLastDetection++;
       if (_framesSinceLastDetection < _maxFramesWithoutDetection &&
@@ -218,16 +214,27 @@ class _DetectionPageState extends State<DetectionPage> {
 
     for (var r in result) {
       final box = r["box"];
-      final tag = r["tag"];
-      final rawConf = _toDouble(box[4]);
+      final tag = r["tag"].toString();
+      double rawConf = _toDouble(box[4]);
 
-      // BYPASS MODE: Tampilkan semua!
       if (bypassFilters) {
         validDetections.add(r);
         continue;
       }
 
-      // Filter 1: Ukuran box
+      // === LOGIC TUNING ===
+      bool isWord = tag.length > 1;
+      double adjustedScore = rawConf;
+
+      if (isWord) {
+        adjustedScore -= 0.40; // HUKUM KATA
+      } else {
+        adjustedScore += 0.20; // BOOST HURUF
+      }
+
+      if (adjustedScore < displayConfThreshold) continue;
+
+      // Filter Ukuran
       double w = (box[2] - box[0]).abs();
       double h = (box[3] - box[1]).abs();
       double imgArea = (image.width * image.height).toDouble();
@@ -235,9 +242,9 @@ class _DetectionPageState extends State<DetectionPage> {
 
       if (ratio < 0.01 || ratio > 0.95) continue;
 
-      // Filter 2: Smoothing Confidence
+      // Smoothing
       _confidenceHistory[tag] = _confidenceHistory[tag] ?? [];
-      _confidenceHistory[tag]!.add(rawConf);
+      _confidenceHistory[tag]!.add(adjustedScore);
       if (_confidenceHistory[tag]!.length > _confidenceHistorySize) {
         _confidenceHistory[tag]!.removeAt(0);
       }
@@ -245,15 +252,14 @@ class _DetectionPageState extends State<DetectionPage> {
       double smoothedConf = _confidenceHistory[tag]!.reduce((a, b) => a + b) /
           _confidenceHistory[tag]!.length;
 
-      // <--- VALIDASI DI SINI: Jika hasil smoothing masih < 50%, buang.
       if (smoothedConf < displayConfThreshold) continue;
 
-      // Filter 3: Stability check
+      // Stability check
       _classFrameCount[tag] = (_classFrameCount[tag] ?? 0) + 1;
       if (_classFrameCount[tag]! < _minDetectionFrames) continue;
 
       var finalBox = List<double>.from(box);
-      finalBox[4] = smoothedConf;
+      finalBox[4] = adjustedScore;
 
       validDetections.add({
         "tag": tag,
@@ -262,7 +268,6 @@ class _DetectionPageState extends State<DetectionPage> {
       });
     }
 
-    // Clean up frame count
     _classFrameCount.removeWhere(
             (key, value) => !validDetections.any((d) => d['tag'] == key));
 
@@ -271,7 +276,7 @@ class _DetectionPageState extends State<DetectionPage> {
       return;
     }
 
-    // NMS
+    // NMS Sorting
     validDetections.sort((a, b) => b['box'][4].compareTo(a['box'][4]));
     List<Map<String, dynamic>> nmsResults = [];
 
@@ -286,7 +291,6 @@ class _DetectionPageState extends State<DetectionPage> {
       if (!overlap) nmsResults.add(det);
     }
 
-    // Simpan deteksi terbaik
     if (nmsResults.isNotEmpty) {
       _prevBestDetection = nmsResults.first;
     }
@@ -296,6 +300,102 @@ class _DetectionPageState extends State<DetectionPage> {
         yoloResults = bypassFilters ? validDetections : nmsResults;
       });
     }
+  }
+
+  // === BISINDO LIBRARY MODAL ===
+  void _showBisindoLibrary() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(20),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: primaryTeal,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.menu_book_rounded,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        "ABJAD BISINDO",
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Colors.white),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: InteractiveViewer(
+                  minScale: 0.5,
+                  maxScale: 4.0,
+                  child: Container(
+                    padding: const EdgeInsets.all(20),
+                    child: Image.asset(
+                      'assets/abjad.jfif',
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: primaryTeal.withAlpha(13),
+                  borderRadius: const BorderRadius.vertical(
+                    bottom: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.pinch_outlined,
+                      size: 18,
+                      color: Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      "Pinch to zoom",
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // --- UI WIDGETS ---
@@ -343,7 +443,6 @@ class _DetectionPageState extends State<DetectionPage> {
       final tag = det['tag'];
       final conf = box[4];
 
-      // LOGIC: Scaling
       double x1 = box[0] * scale + offsetX;
       double y1 = box[1] * scale + offsetY;
       double x2 = box[2] * scale + offsetX;
@@ -361,7 +460,6 @@ class _DetectionPageState extends State<DetectionPage> {
       double top = math.min(y1, y2);
       double bottom = math.max(y1, y2);
 
-      // Smoothing
       final smoothKey = tag;
       if (_prevDisplayBoxes.containsKey(smoothKey)) {
         final prev = _prevDisplayBoxes[smoothKey]!;
@@ -375,7 +473,6 @@ class _DetectionPageState extends State<DetectionPage> {
       double w = (right - left).abs();
       double h = (bottom - top).abs();
 
-      // <--- UBAH DISINI: Validasi visual, jika > 50% warnanya hijau menyala
       Color borderColor = conf >= 0.50 ? Colors.greenAccent.shade400 : Colors.yellow;
       Color labelColor = conf >= 0.50 ? Colors.greenAccent.shade400 : primaryTeal;
 
@@ -562,6 +659,12 @@ class _DetectionPageState extends State<DetectionPage> {
       appBar: AppBar(
         title: const Text("BISINDO Detector"),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.menu_book_rounded),
+            onPressed: _showBisindoLibrary,
+            tooltip: "BISINDO Library",
+            color: primaryColor,
+          ),
           IconButton(
             icon: const Icon(Icons.cameraswitch_outlined),
             onPressed: switchCamera,

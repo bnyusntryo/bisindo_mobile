@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'detection_page.dart';
+import 'intro_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -67,7 +67,7 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const DetectionPage(),
+      home: const IntroPage(), // 👈 Changed from DetectionPage to IntroPage
     );
   }
 }
