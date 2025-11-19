@@ -23,29 +23,30 @@ class _DetectionPageState extends State<DetectionPage> {
 
   List<Map<String, dynamic>> yoloResults = [];
 
-  // Smoothing & History
+  // === SMOOTHING & STABILIZATION ===
   final Map<String, List<double>> _prevDisplayBoxes = {};
   final Map<String, List<double>> _confidenceHistory = {};
-  final int _confidenceHistorySize = 3;
+  final int _confidenceHistorySize = 5; // Naik dikit biar stabil
   final Map<String, int> _classFrameCount = {};
 
   Map<String, dynamic>? _prevBestDetection;
   int _framesSinceLastDetection = 0;
 
-  // Config
-  double modelConfThreshold = 0.20; // Diturunkan agar huruf kecil terdeteksi dulu
+  // === CONFIGURABLE PARAMETERS (TUNED) ===
+  double modelConfThreshold = 0.15; // TURUNIN BIAR HURUF KECIL MASUK
   double modelIouThreshold = 0.40;
-  double modelClassThreshold = 0.20;
-  double displayConfThreshold = 0.50; // Ambang batas tampil ke layar
+  double modelClassThreshold = 0.15; // TURUNIN JUGA
+  double displayConfThreshold = 0.45; // FILTER TAMPILAN
 
   double boxSmoothingAlpha = 0.7;
-  final int _minDetectionFrames = 1;
+  final int _minDetectionFrames = 2;
   final int _maxFramesWithoutDetection = 3;
 
   bool forceFrontCamera = true;
   bool debugMode = false;
   bool bypassFilters = false;
 
+  // Tracking
   int _totalFrames = 0;
   int _detectionCount = 0;
 
@@ -64,6 +65,7 @@ class _DetectionPageState extends State<DetectionPage> {
     super.dispose();
   }
 
+  // --- LOGIC FUNCTIONS ---
   Future<void> init() async {
     try {
       cameras = await availableCameras();
@@ -85,10 +87,13 @@ class _DetectionPageState extends State<DetectionPage> {
       numThreads: 4,
       useGpu: false,
     );
+    debugPrint("✓ Model loaded successfully (YOLOv8 Float16)");
   }
 
   Future<void> initializeCamera() async {
-    if (controller != null) await controller!.dispose();
+    if (controller != null) {
+      await controller!.dispose();
+    }
 
     if (forceFrontCamera) {
       final frontIndex = cameras
@@ -104,15 +109,19 @@ class _DetectionPageState extends State<DetectionPage> {
     );
 
     await controller!.initialize();
+    debugPrint("📸 Camera initialized: ${controller!.value.previewSize}");
     setState(() {});
   }
 
   Future<void> switchCamera() async {
     if (cameras.length < 2) return;
+
     bool wasDetecting = isDetecting;
     if (wasDetecting) await stopDetection();
+
     selectedCameraIndex = (selectedCameraIndex + 1) % cameras.length;
     await initializeCamera();
+
     if (wasDetecting) {
       await Future.delayed(const Duration(milliseconds: 500));
       startDetection();
@@ -130,8 +139,10 @@ class _DetectionPageState extends State<DetectionPage> {
 
     await controller!.startImageStream((image) async {
       if (isBusy || !isDetecting) return;
+
       isBusy = true;
       _totalFrames++;
+
       try {
         await runYolo(image);
       } catch (e) {
@@ -152,6 +163,8 @@ class _DetectionPageState extends State<DetectionPage> {
     _prevDisplayBoxes.clear();
     _confidenceHistory.clear();
     _classFrameCount.clear();
+
+    debugPrint("📊 Session Stats: $_detectionCount detections in $_totalFrames frames");
   }
 
   double _toDouble(dynamic value) {
@@ -165,9 +178,11 @@ class _DetectionPageState extends State<DetectionPage> {
     final yA = math.max(box1[1], box2[1]);
     final xB = math.min(box1[2], box2[2]);
     final yB = math.min(box1[3], box2[3]);
+
     final interArea = math.max(0.0, xB - xA) * math.max(0.0, yB - yA);
     final box1Area = (box1[2] - box1[0]) * (box1[3] - box1[1]);
     final box2Area = (box2[2] - box2[0]) * (box2[3] - box2[1]);
+
     return interArea / (box1Area + box2Area - interArea + 1e-6);
   }
 
@@ -177,7 +192,7 @@ class _DetectionPageState extends State<DetectionPage> {
       imageHeight: image.height,
       imageWidth: image.width,
       iouThreshold: modelIouThreshold,
-      confThreshold: modelConfThreshold,
+      confThreshold: modelConfThreshold, // LOW THRESHOLD
       classThreshold: modelClassThreshold,
     );
 
@@ -207,19 +222,19 @@ class _DetectionPageState extends State<DetectionPage> {
         continue;
       }
 
-      // --- LOGIC PENALTY/BONUS (FIX BIAS KATA) ---
+      // === LOGIC TUNING ===
       bool isWord = tag.length > 1;
       double adjustedScore = rawConf;
 
       if (isWord) {
-        adjustedScore -= 0.20; // Hukuman untuk Kata
+        adjustedScore -= 0.40; // HUKUM KATA
       } else {
-        adjustedScore += 0.05; // Bonus untuk Huruf
+        adjustedScore += 0.20; // BOOST HURUF
       }
 
       if (adjustedScore < displayConfThreshold) continue;
 
-      // Filter Ukuran Box
+      // Filter Ukuran
       double w = (box[2] - box[0]).abs();
       double h = (box[3] - box[1]).abs();
       double imgArea = (image.width * image.height).toDouble();
@@ -227,7 +242,7 @@ class _DetectionPageState extends State<DetectionPage> {
 
       if (ratio < 0.01 || ratio > 0.95) continue;
 
-      // Smoothing Confidence
+      // Smoothing
       _confidenceHistory[tag] = _confidenceHistory[tag] ?? [];
       _confidenceHistory[tag]!.add(adjustedScore);
       if (_confidenceHistory[tag]!.length > _confidenceHistorySize) {
@@ -239,12 +254,12 @@ class _DetectionPageState extends State<DetectionPage> {
 
       if (smoothedConf < displayConfThreshold) continue;
 
-      // Stability Check
+      // Stability check
       _classFrameCount[tag] = (_classFrameCount[tag] ?? 0) + 1;
       if (_classFrameCount[tag]! < _minDetectionFrames) continue;
 
       var finalBox = List<double>.from(box);
-      finalBox[4] = adjustedScore; // Pakai score yang sudah di-adjust
+      finalBox[4] = adjustedScore;
 
       validDetections.add({
         "tag": tag,
@@ -254,17 +269,17 @@ class _DetectionPageState extends State<DetectionPage> {
     }
 
     _classFrameCount.removeWhere(
-        (key, value) => !validDetections.any((d) => d['tag'] == key));
+            (key, value) => !validDetections.any((d) => d['tag'] == key));
 
     if (validDetections.isEmpty) {
       if (mounted) setState(() => yoloResults = []);
       return;
     }
 
-    // NMS Sorting (Prioritaskan Score Tinggi -> Huruf akan naik)
+    // NMS Sorting
     validDetections.sort((a, b) => b['box'][4].compareTo(a['box'][4]));
-    
     List<Map<String, dynamic>> nmsResults = [];
+
     for (var det in validDetections) {
       bool overlap = false;
       for (var saved in nmsResults) {
@@ -287,8 +302,7 @@ class _DetectionPageState extends State<DetectionPage> {
     }
   }
 
-  // --- UI HELPERS ---
-
+  // === BISINDO LIBRARY MODAL ===
   void _showBisindoLibrary() {
     showDialog(
       context: context,
@@ -313,7 +327,11 @@ class _DetectionPageState extends State<DetectionPage> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.menu_book_rounded, color: Colors.white, size: 28),
+                    const Icon(
+                      Icons.menu_book_rounded,
+                      color: Colors.white,
+                      size: 28,
+                    ),
                     const SizedBox(width: 12),
                     const Expanded(
                       child: Text(
@@ -356,7 +374,11 @@ class _DetectionPageState extends State<DetectionPage> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.pinch_outlined, size: 18, color: Colors.grey.shade600),
+                    Icon(
+                      Icons.pinch_outlined,
+                      size: 18,
+                      color: Colors.grey.shade600,
+                    ),
                     const SizedBox(width: 8),
                     Text(
                       "Pinch to zoom",
@@ -375,6 +397,8 @@ class _DetectionPageState extends State<DetectionPage> {
       ),
     );
   }
+
+  // --- UI WIDGETS ---
 
   Widget _buildLoadingScreen(BuildContext context) {
     final theme = Theme.of(context).textTheme;
@@ -417,7 +441,7 @@ class _DetectionPageState extends State<DetectionPage> {
     return yoloResults.map((det) {
       final box = det['box'];
       final tag = det['tag'];
-      final conf = box[4]; // Score yang sudah dimanipulasi
+      final conf = box[4];
 
       double x1 = box[0] * scale + offsetX;
       double y1 = box[1] * scale + offsetY;
@@ -562,7 +586,11 @@ class _DetectionPageState extends State<DetectionPage> {
                 children: [
                   const Text(
                     "⚙️ DEBUG PANEL",
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
                   ),
                   Text(
                     "Frames: $_totalFrames | Detections: $_detectionCount",
@@ -573,7 +601,8 @@ class _DetectionPageState extends State<DetectionPage> {
               const Divider(color: Colors.white30),
               Row(
                 children: [
-                  const Text("Conf. Th:", style: TextStyle(color: Colors.white, fontSize: 12)),
+                  const Text("Conf. Th:",
+                      style: TextStyle(color: Colors.white, fontSize: 12)),
                   Expanded(
                     child: Slider(
                       value: displayConfThreshold,
@@ -599,7 +628,10 @@ class _DetectionPageState extends State<DetectionPage> {
               SizedBox(
                 height: 30,
                 child: CheckboxListTile(
-                  title: const Text("Bypass Filters", style: TextStyle(color: Colors.white, fontSize: 12)),
+                  title: const Text(
+                    "Bypass Filters",
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
                   value: bypassFilters,
                   checkColor: primaryTeal,
                   activeColor: Colors.white,
@@ -648,7 +680,8 @@ class _DetectionPageState extends State<DetectionPage> {
       body: LayoutBuilder(
         builder: (context, constraints) {
           final previewSize = controller!.value.previewSize!;
-          final isPortrait = MediaQuery.of(context).orientation == Orientation.portrait;
+          final isPortrait =
+              MediaQuery.of(context).orientation == Orientation.portrait;
 
           double sensorW, sensorH;
           if (isPortrait) {
@@ -665,6 +698,7 @@ class _DetectionPageState extends State<DetectionPage> {
 
           double scaledPreviewW = sensorW * finalScale;
           double scaledPreviewH = sensorH * finalScale;
+
           double offsetX = (constraints.maxWidth - scaledPreviewW) / 2;
           double offsetY = (constraints.maxHeight - scaledPreviewH) / 2;
 
