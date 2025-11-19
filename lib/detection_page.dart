@@ -13,40 +13,44 @@ class DetectionPage extends StatefulWidget {
 class _DetectionPageState extends State<DetectionPage> {
   CameraController? controller;
   late FlutterVision vision;
-
   List<CameraDescription> cameras = [];
   int selectedCameraIndex = 0;
 
   bool isLoaded = false;
   bool isDetecting = false;
   bool isBusy = false;
-
   List<Map<String, dynamic>> yoloResults = [];
 
-  // === SMOOTHING & STABILIZATION ===
+  // Strict Mode: TRUE = Huruf Saja, FALSE = Kata Saja
+  bool _isAlphabetMode = true; 
+
+  // Stabilization Variables
   final Map<String, List<double>> _prevDisplayBoxes = {};
   final Map<String, List<double>> _confidenceHistory = {};
-  final int _confidenceHistorySize = 5; // Naik dikit biar stabil
-  final Map<String, int> _classFrameCount = {};
-
+  final int _confidenceHistorySize = 5; 
+  final Map<String, int> _classFrameCount = {}; // Counter Frame
+  
   Map<String, dynamic>? _prevBestDetection;
   int _framesSinceLastDetection = 0;
 
-  // === CONFIGURABLE PARAMETERS (TUNED) ===
-  double modelConfThreshold = 0.15; // TURUNIN BIAR HURUF KECIL MASUK
+  // === CONFIG ===
+  // Threshold model rendah biar semua kandidat masuk dulu
+  double modelConfThreshold = 0.15; 
   double modelIouThreshold = 0.40;
-  double modelClassThreshold = 0.15; // TURUNIN JUGA
-  double displayConfThreshold = 0.45; // FILTER TAMPILAN
+  double modelClassThreshold = 0.15;
+  
+  // Threshold Tampilan (Slider)
+  double displayConfThreshold = 0.40; 
 
   double boxSmoothingAlpha = 0.7;
-  final int _minDetectionFrames = 2;
+  // BUG FIX: Turunin jadi 1 biar instan, atau biarin 2 tapi logic cleanup dibenerin
+  final int _minDetectionFrames = 2; 
   final int _maxFramesWithoutDetection = 3;
 
   bool forceFrontCamera = true;
-  bool debugMode = false;
+  bool debugMode = false; // Bisa dimatiin kalau udah fix
   bool bypassFilters = false;
 
-  // Tracking
   int _totalFrames = 0;
   int _detectionCount = 0;
 
@@ -65,7 +69,6 @@ class _DetectionPageState extends State<DetectionPage> {
     super.dispose();
   }
 
-  // --- LOGIC FUNCTIONS ---
   Future<void> init() async {
     try {
       cameras = await availableCameras();
@@ -87,17 +90,13 @@ class _DetectionPageState extends State<DetectionPage> {
       numThreads: 4,
       useGpu: false,
     );
-    debugPrint("✓ Model loaded successfully (YOLOv8 Float16)");
   }
 
   Future<void> initializeCamera() async {
-    if (controller != null) {
-      await controller!.dispose();
-    }
+    if (controller != null) await controller!.dispose();
 
     if (forceFrontCamera) {
-      final frontIndex = cameras
-          .indexWhere((c) => c.lensDirection == CameraLensDirection.front);
+      final frontIndex = cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.front);
       if (frontIndex != -1) selectedCameraIndex = frontIndex;
     }
 
@@ -109,19 +108,15 @@ class _DetectionPageState extends State<DetectionPage> {
     );
 
     await controller!.initialize();
-    debugPrint("📸 Camera initialized: ${controller!.value.previewSize}");
     setState(() {});
   }
 
   Future<void> switchCamera() async {
     if (cameras.length < 2) return;
-
     bool wasDetecting = isDetecting;
     if (wasDetecting) await stopDetection();
-
     selectedCameraIndex = (selectedCameraIndex + 1) % cameras.length;
     await initializeCamera();
-
     if (wasDetecting) {
       await Future.delayed(const Duration(milliseconds: 500));
       startDetection();
@@ -139,10 +134,8 @@ class _DetectionPageState extends State<DetectionPage> {
 
     await controller!.startImageStream((image) async {
       if (isBusy || !isDetecting) return;
-
       isBusy = true;
       _totalFrames++;
-
       try {
         await runYolo(image);
       } catch (e) {
@@ -163,8 +156,8 @@ class _DetectionPageState extends State<DetectionPage> {
     _prevDisplayBoxes.clear();
     _confidenceHistory.clear();
     _classFrameCount.clear();
-
-    debugPrint("📊 Session Stats: $_detectionCount detections in $_totalFrames frames");
+    _prevBestDetection = null;
+    debugPrint("Stats: $_detectionCount detections");
   }
 
   double _toDouble(dynamic value) {
@@ -178,11 +171,9 @@ class _DetectionPageState extends State<DetectionPage> {
     final yA = math.max(box1[1], box2[1]);
     final xB = math.min(box1[2], box2[2]);
     final yB = math.min(box1[3], box2[3]);
-
     final interArea = math.max(0.0, xB - xA) * math.max(0.0, yB - yA);
     final box1Area = (box1[2] - box1[0]) * (box1[3] - box1[1]);
     final box2Area = (box2[2] - box2[0]) * (box2[3] - box2[1]);
-
     return interArea / (box1Area + box2Area - interArea + 1e-6);
   }
 
@@ -192,16 +183,25 @@ class _DetectionPageState extends State<DetectionPage> {
       imageHeight: image.height,
       imageWidth: image.width,
       iouThreshold: modelIouThreshold,
-      confThreshold: modelConfThreshold, // LOW THRESHOLD
+      confThreshold: modelConfThreshold,
       classThreshold: modelClassThreshold,
     );
 
+    // --- HANDLE KOSONG & MEMORI ---
     if (result.isEmpty) {
       _framesSinceLastDetection++;
-      if (_framesSinceLastDetection < _maxFramesWithoutDetection &&
-          _prevBestDetection != null) {
-        if (mounted) setState(() => yoloResults = [_prevBestDetection!]);
-        return;
+      if (_framesSinceLastDetection < _maxFramesWithoutDetection && _prevBestDetection != null) {
+        // Cek validitas memori
+        final memTag = _prevBestDetection!['tag'].toString().trim();
+        final isMemWord = memTag.length > 1;
+        bool isMemoryValid = (_isAlphabetMode && !isMemWord) || (!_isAlphabetMode && isMemWord);
+
+        if (isMemoryValid) {
+          if (mounted) setState(() => yoloResults = [_prevBestDetection!]);
+          return;
+        } else {
+          _prevBestDetection = null;
+        }
       }
       if (mounted) setState(() => yoloResults = []);
       return;
@@ -210,11 +210,20 @@ class _DetectionPageState extends State<DetectionPage> {
     _framesSinceLastDetection = 0;
     _detectionCount++;
 
+    // --- PREPARE DATA ---
     List<Map<String, dynamic>> validDetections = [];
+    
+    // [FIX] Catat semua tag yang MENTAH-MENTAH ada di frame ini
+    // Ini dipake buat cleaning counter nanti, biar gak salah hapus
+    Set<String> rawTagsInThisFrame = {};
 
     for (var r in result) {
+      final rawTag = r["tag"].toString();
+      // Jimat Trim: Bersihin spasi/enter
+      final tag = rawTag.trim().replaceAll(RegExp(r'\s+'), ""); 
+      rawTagsInThisFrame.add(tag);
+
       final box = r["box"];
-      final tag = r["tag"].toString();
       double rawConf = _toDouble(box[4]);
 
       if (bypassFilters) {
@@ -222,44 +231,42 @@ class _DetectionPageState extends State<DetectionPage> {
         continue;
       }
 
-      // === LOGIC TUNING ===
-      bool isWord = tag.length > 1;
-      double adjustedScore = rawConf;
+      // === STRICT FILTER ===
+      bool isWord = tag.length > 1; 
+      if (_isAlphabetMode && isWord) continue; // Mode Huruf, usir Kata
+      if (!_isAlphabetMode && !isWord) continue; // Mode Kata, usir Huruf
 
-      if (isWord) {
-        adjustedScore -= 0.40; // HUKUM KATA
-      } else {
-        adjustedScore += 0.20; // BOOST HURUF
-      }
-
-      if (adjustedScore < displayConfThreshold) continue;
+      // Filter Threshold
+      if (rawConf < displayConfThreshold) continue;
 
       // Filter Ukuran
       double w = (box[2] - box[0]).abs();
       double h = (box[3] - box[1]).abs();
       double imgArea = (image.width * image.height).toDouble();
       double ratio = (w * h) / imgArea;
+      if (ratio < 0.01 || ratio > 0.90) continue;
 
-      if (ratio < 0.01 || ratio > 0.95) continue;
-
-      // Smoothing
+      // Smoothing Confidence
       _confidenceHistory[tag] = _confidenceHistory[tag] ?? [];
-      _confidenceHistory[tag]!.add(adjustedScore);
+      _confidenceHistory[tag]!.add(rawConf);
       if (_confidenceHistory[tag]!.length > _confidenceHistorySize) {
         _confidenceHistory[tag]!.removeAt(0);
       }
-
-      double smoothedConf = _confidenceHistory[tag]!.reduce((a, b) => a + b) /
-          _confidenceHistory[tag]!.length;
-
+      double smoothedConf = _confidenceHistory[tag]!.reduce((a, b) => a + b) / _confidenceHistory[tag]!.length;
       if (smoothedConf < displayConfThreshold) continue;
 
-      // Stability check
+      // === STABILITY CHECK (FIXED) ===
+      // Kita naikin counternya
       _classFrameCount[tag] = (_classFrameCount[tag] ?? 0) + 1;
-      if (_classFrameCount[tag]! < _minDetectionFrames) continue;
+      
+      // Kalau belum cukup umur (frame count < min), JANGAN DIMASUKIN ke validDetections
+      // TAPI... jangan dihapus juga dari memori counternya.
+      if (_classFrameCount[tag]! < _minDetectionFrames) {
+        continue; 
+      }
 
       var finalBox = List<double>.from(box);
-      finalBox[4] = adjustedScore;
+      finalBox[4] = rawConf;
 
       validDetections.add({
         "tag": tag,
@@ -268,18 +275,15 @@ class _DetectionPageState extends State<DetectionPage> {
       });
     }
 
-    _classFrameCount.removeWhere(
-            (key, value) => !validDetections.any((d) => d['tag'] == key));
+    // [FIX] LOGIC PEMBERSIH COUNTER YANG BENAR
+    // Hapus counter HANYA JIKA tag tersebut BENAR-BENAR HILANG dari pandangan kamera (raw result)
+    // Bukan karena difilter sama logic kita.
+    _classFrameCount.removeWhere((key, value) => !rawTagsInThisFrame.contains(key));
 
-    if (validDetections.isEmpty) {
-      if (mounted) setState(() => yoloResults = []);
-      return;
-    }
-
-    // NMS Sorting
     validDetections.sort((a, b) => b['box'][4].compareTo(a['box'][4]));
+    
+    // NMS
     List<Map<String, dynamic>> nmsResults = [];
-
     for (var det in validDetections) {
       bool overlap = false;
       for (var saved in nmsResults) {
@@ -291,18 +295,15 @@ class _DetectionPageState extends State<DetectionPage> {
       if (!overlap) nmsResults.add(det);
     }
 
-    if (nmsResults.isNotEmpty) {
-      _prevBestDetection = nmsResults.first;
-    }
+    if (nmsResults.isNotEmpty) _prevBestDetection = nmsResults.first;
 
     if (mounted) {
-      setState(() {
-        yoloResults = bypassFilters ? validDetections : nmsResults;
-      });
+      setState(() => yoloResults = bypassFilters ? validDetections : nmsResults);
     }
   }
 
-  // === BISINDO LIBRARY MODAL ===
+  // --- UI ---
+
   void _showBisindoLibrary() {
     showDialog(
       context: context,
@@ -310,10 +311,7 @@ class _DetectionPageState extends State<DetectionPage> {
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.all(20),
         child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(20),
-          ),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -321,74 +319,26 @@ class _DetectionPageState extends State<DetectionPage> {
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: primaryTeal,
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(20),
-                  ),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
                 ),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.menu_book_rounded,
-                      color: Colors.white,
-                      size: 28,
-                    ),
+                    const Icon(Icons.menu_book_rounded, color: Colors.white, size: 28),
                     const SizedBox(width: 12),
                     const Expanded(
-                      child: Text(
-                        "ABJAD BISINDO",
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
+                      child: Text("ABJAD BISINDO", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
-                    ),
+                    IconButton(icon: const Icon(Icons.close_rounded, color: Colors.white), onPressed: () => Navigator.pop(context)),
                   ],
                 ),
               ),
               Flexible(
                 child: InteractiveViewer(
-                  minScale: 0.5,
-                  maxScale: 4.0,
+                  minScale: 0.5, maxScale: 4.0,
                   child: Container(
                     padding: const EdgeInsets.all(20),
-                    child: Image.asset(
-                      'assets/abjad.jfif',
-                      fit: BoxFit.contain,
-                    ),
+                    child: Image.asset('assets/abjad.jfif', fit: BoxFit.contain),
                   ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: primaryTeal.withAlpha(13),
-                  borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(20),
-                  ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.pinch_outlined,
-                      size: 18,
-                      color: Colors.grey.shade600,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      "Pinch to zoom",
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade600,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
                 ),
               ),
             ],
@@ -398,44 +348,24 @@ class _DetectionPageState extends State<DetectionPage> {
     );
   }
 
-  // --- UI WIDGETS ---
-
   Widget _buildLoadingScreen(BuildContext context) {
-    final theme = Theme.of(context).textTheme;
     return Scaffold(
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const CircularProgressIndicator(
-              color: primaryTeal,
-              strokeWidth: 4,
-            ),
+            const CircularProgressIndicator(color: primaryTeal, strokeWidth: 4),
             const SizedBox(height: 24),
-            Text(
-              "Memuat Model Deteksi...",
-              style: theme.titleMedium?.copyWith(
-                color: primaryTeal,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            Text("Memuat Model...", style: TextStyle(color: primaryTeal, fontWeight: FontWeight.w600, fontSize: 18)),
           ],
         ),
       ),
     );
   }
 
-  List<Widget> _buildBoxes(
-      BoxConstraints constraints,
-      double sensorW,
-      double sensorH,
-      double scale,
-      double offsetX,
-      double offsetY) {
+  List<Widget> _buildBoxes(BoxConstraints constraints, double sensorW, double sensorH, double scale, double offsetX, double offsetY) {
     if (yoloResults.isEmpty) return [];
-
-    final isFrontCamera = cameras[selectedCameraIndex].lensDirection ==
-        CameraLensDirection.front;
+    final isFrontCamera = cameras[selectedCameraIndex].lensDirection == CameraLensDirection.front;
     const double borderRadius = 6.0;
 
     return yoloResults.map((det) {
@@ -449,8 +379,7 @@ class _DetectionPageState extends State<DetectionPage> {
       double y2 = box[3] * scale + offsetY;
 
       if (isFrontCamera) {
-        double oldY1 = y1;
-        double oldY2 = y2;
+        double oldY1 = y1; double oldY2 = y2;
         y1 = constraints.maxHeight - oldY2;
         y2 = constraints.maxHeight - oldY1;
       }
@@ -470,17 +399,10 @@ class _DetectionPageState extends State<DetectionPage> {
       }
       _prevDisplayBoxes[smoothKey] = [left, top, right, bottom];
 
-      double w = (right - left).abs();
-      double h = (bottom - top).abs();
-
-      Color borderColor = conf >= 0.50 ? Colors.greenAccent.shade400 : Colors.yellow;
-      Color labelColor = conf >= 0.50 ? Colors.greenAccent.shade400 : primaryTeal;
+      Color borderColor = conf >= 0.60 ? Colors.greenAccent.shade400 : Colors.yellow;
 
       return Positioned(
-        left: left,
-        top: top,
-        width: w,
-        height: h,
+        left: left, top: top, width: (right - left).abs(), height: (bottom - top).abs(),
         child: Container(
           decoration: BoxDecoration(
             border: Border.all(color: borderColor, width: 2.5),
@@ -491,19 +413,12 @@ class _DetectionPageState extends State<DetectionPage> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: labelColor,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(borderRadius - 1),
-                  bottomRight: Radius.circular(3),
-                ),
+                color: primaryTeal,
+                borderRadius: const BorderRadius.only(topLeft: Radius.circular(borderRadius - 1), bottomRight: Radius.circular(3)),
               ),
               child: Text(
                 "$tag ${(conf * 100).toStringAsFixed(0)}%",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
               ),
             ),
           ),
@@ -514,131 +429,67 @@ class _DetectionPageState extends State<DetectionPage> {
 
   Widget _buildStatusIndicator() {
     final detectedTags = yoloResults.map((r) => r['tag']).join(', ');
-    final displayText = detectedTags.isEmpty
-        ? (isDetecting ? "Menganalisis Gerakan..." : "Siap Deteksi")
-        : detectedTags.toUpperCase();
+    final displayText = detectedTags.isEmpty ? (isDetecting ? "Mencari..." : "Siap") : detectedTags.toUpperCase();
+    final color = detectedTags.isEmpty ? Colors.grey.shade700 : Colors.green.shade600;
 
-    final displayColor = detectedTags.isEmpty
-        ? (isDetecting ? Colors.blueGrey.shade600 : primaryTeal)
-        : Colors.green.shade600;
-
-    final displayIcon = detectedTags.isEmpty
-        ? (isDetecting ? Icons.videocam : Icons.search)
-        : Icons.waving_hand;
+    String modeLabel = _isAlphabetMode ? "MODE: ABJAD" : "MODE: KATA";
+    Color modeColor = _isAlphabetMode ? Colors.orange.shade800 : primaryTeal;
 
     return Positioned(
-      bottom: 100,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          decoration: BoxDecoration(
-            color: displayColor.withAlpha(242),
-            borderRadius: BorderRadius.circular(25),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha(51),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
+      bottom: 100, left: 20, right: 20,
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(color: modeColor.withAlpha(200), borderRadius: BorderRadius.circular(15)),
+            child: Text(modeLabel, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(displayIcon, color: Colors.white, size: 20),
-              const SizedBox(width: 10),
-              Text(
-                displayText,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-            ],
+          Center(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOut,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              decoration: BoxDecoration(color: color.withAlpha(230), borderRadius: BorderRadius.circular(30)),
+              child: Text(displayText, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
 
   Widget _buildDebugPanel() {
     return Positioned(
-      bottom: 200,
-      left: 20,
-      right: 20,
+      bottom: 200, left: 20, right: 20,
       child: Card(
-        color: Colors.grey.shade900.withAlpha(229),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        elevation: 5,
+        color: Colors.black54,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    "⚙️ DEBUG PANEL",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                    ),
-                  ),
-                  Text(
-                    "Frames: $_totalFrames | Detections: $_detectionCount",
-                    style: const TextStyle(color: Colors.white70, fontSize: 10),
-                  ),
-                ],
-              ),
-              const Divider(color: Colors.white30),
+              Text("Debug: Frames $_totalFrames | Det: $_detectionCount", style: const TextStyle(color: Colors.white)),
               Row(
                 children: [
-                  const Text("Conf. Th:",
-                      style: TextStyle(color: Colors.white, fontSize: 12)),
+                  const Text("Th:", style: TextStyle(color: Colors.white)),
                   Expanded(
                     child: Slider(
-                      value: displayConfThreshold,
-                      min: 0.1,
-                      max: 0.9,
-                      divisions: 16,
+                      value: displayConfThreshold, min: 0.01, max: 0.9,
                       activeColor: primaryTeal,
-                      inactiveColor: primaryTeal.withAlpha(76),
-                      label: "${(displayConfThreshold * 100).toStringAsFixed(0)}%",
                       onChanged: (v) => setState(() => displayConfThreshold = v),
                     ),
                   ),
-                  Text(
-                    "${(displayConfThreshold * 100).toStringAsFixed(0)}%",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
+                  Text(displayConfThreshold.toStringAsFixed(2), style: const TextStyle(color: Colors.white)),
                 ],
               ),
-              SizedBox(
-                height: 30,
-                child: CheckboxListTile(
-                  title: const Text(
-                    "Bypass Filters",
-                    style: TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                  value: bypassFilters,
-                  checkColor: primaryTeal,
-                  activeColor: Colors.white,
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  onChanged: (v) => setState(() => bypassFilters = v!),
-                ),
+              CheckboxListTile(
+                title: const Text("Bypass Filters", style: TextStyle(color: Colors.white)),
+                value: bypassFilters,
+                checkColor: primaryTeal,
+                activeColor: Colors.white,
+                contentPadding: EdgeInsets.zero,
+                onChanged: (v) => setState(() => bypassFilters = v!),
               ),
             ],
           ),
@@ -652,94 +503,70 @@ class _DetectionPageState extends State<DetectionPage> {
     if (!isLoaded || controller == null || !controller!.value.isInitialized) {
       return _buildLoadingScreen(context);
     }
-
-    final primaryColor = Theme.of(context).colorScheme.primary;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text("BISINDO Detector"),
         actions: [
           IconButton(
-            icon: const Icon(Icons.menu_book_rounded),
-            onPressed: _showBisindoLibrary,
-            tooltip: "BISINDO Library",
-            color: primaryColor,
+            icon: Icon(
+              _isAlphabetMode ? Icons.abc : Icons.chat_bubble_outline,
+              color: _isAlphabetMode ? Colors.amber : primaryTeal, 
+              size: 30,
+            ),
+            tooltip: "Ganti Mode",
+            onPressed: () {
+              setState(() {
+                _isAlphabetMode = !_isAlphabetMode;
+                yoloResults.clear();
+                _prevDisplayBoxes.clear();
+                _confidenceHistory.clear();
+                _classFrameCount.clear();
+                _prevBestDetection = null;
+              });
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(_isAlphabetMode ? "Mode ABJAD (Hanya Huruf)" : "Mode KATA (Hanya Kata)"),
+                  duration: const Duration(seconds: 1),
+                  backgroundColor: primaryTeal,
+                ),
+              );
+            },
           ),
-          IconButton(
-            icon: const Icon(Icons.cameraswitch_outlined),
-            onPressed: switchCamera,
-            color: primaryColor,
-          ),
-          IconButton(
-            icon: Icon(debugMode ? Icons.bug_report : Icons.bug_report_outlined),
-            onPressed: () => setState(() => debugMode = !debugMode),
-            color: primaryColor,
-          ),
+          IconButton(icon: const Icon(Icons.menu_book_rounded), onPressed: _showBisindoLibrary, color: primaryTeal),
+          IconButton(icon: const Icon(Icons.cameraswitch_outlined), onPressed: switchCamera, color: primaryTeal),
+          IconButton(icon: Icon(debugMode ? Icons.bug_report : Icons.bug_report_outlined), onPressed: () => setState(() => debugMode = !debugMode), color: primaryTeal),
         ],
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final previewSize = controller!.value.previewSize!;
-          final isPortrait =
-              MediaQuery.of(context).orientation == Orientation.portrait;
-
-          double sensorW, sensorH;
-          if (isPortrait) {
-            sensorW = previewSize.height;
-            sensorH = previewSize.width;
-          } else {
-            sensorW = previewSize.width;
-            sensorH = previewSize.height;
-          }
-
+          final size = controller!.value.previewSize!;
+          final isPortrait = MediaQuery.of(context).orientation == Orientation.portrait;
+          double sensorW = isPortrait ? size.height : size.width;
+          double sensorH = isPortrait ? size.width : size.height;
           double scaleX = constraints.maxWidth / sensorW;
           double scaleY = constraints.maxHeight / sensorH;
           double finalScale = math.max(scaleX, scaleY);
-
-          double scaledPreviewW = sensorW * finalScale;
-          double scaledPreviewH = sensorH * finalScale;
-
-          double offsetX = (constraints.maxWidth - scaledPreviewW) / 2;
-          double offsetY = (constraints.maxHeight - scaledPreviewH) / 2;
+          double w = sensorW * finalScale;
+          double h = sensorH * finalScale;
+          double ox = (constraints.maxWidth - w) / 2;
+          double oy = (constraints.maxHeight - h) / 2;
 
           return Stack(
-            fit: StackFit.expand,
             children: [
-              Center(
-                child: OverflowBox(
-                  maxWidth: scaledPreviewW,
-                  maxHeight: scaledPreviewH,
-                  minWidth: scaledPreviewW,
-                  minHeight: scaledPreviewH,
-                  child: SizedBox(
-                    width: scaledPreviewW,
-                    height: scaledPreviewH,
-                    child: CameraPreview(controller!),
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: Stack(
-                  children: _buildBoxes(
-                      constraints, sensorW, sensorH, finalScale, offsetX, offsetY),
-                ),
-              ),
+              Center(child: OverflowBox(minWidth: w, maxWidth: w, minHeight: h, maxHeight: h, child: CameraPreview(controller!))),
+              Positioned.fill(child: Stack(children: _buildBoxes(constraints, sensorW, sensorH, finalScale, ox, oy))),
               if (debugMode) _buildDebugPanel(),
               _buildStatusIndicator(),
               Positioned(
-                bottom: 30,
-                left: 0,
-                right: 0,
+                bottom: 30, left: 0, right: 0,
                 child: Center(
                   child: FloatingActionButton(
                     heroTag: "fab_action",
                     onPressed: isDetecting ? stopDetection : startDetection,
-                    backgroundColor: isDetecting ? Colors.red.shade700 : primaryColor,
+                    backgroundColor: isDetecting ? Colors.red.shade700 : primaryTeal,
                     foregroundColor: Colors.white,
-                    child: Icon(
-                      isDetecting ? Icons.stop : Icons.play_arrow_rounded,
-                      size: 32,
-                    ),
+                    child: Icon(isDetecting ? Icons.stop : Icons.play_arrow_rounded, size: 32),
                   ),
                 ),
               ),
