@@ -1,28 +1,11 @@
-# Flutter Vision & TFLite Rules
--keep class org.tensorflow.** { *; }
+# Aturan yang sudah ada (JANGAN DIHAPUS)
 -keep class org.tensorflow.lite.** { *; }
--keepclassmembers class org.tensorflow.** { *; }
--keepclassmembers class org.tensorflow.lite.** { *; }
+-keep class com.tflite.flutter_vision.** { *; }
 
-# Keep native methods
--keepclasseswithmembernames class * {
-    native <methods>;
-}
+# === TAMBAHAN BARU ===
+# Abaikan error tentang AutoValue (Google Auto)
+-dontwarn com.google.auto.value.**
 
-# Flutter
--keep class io.flutter.app.** { *; }
--keep class io.flutter.plugin.** { *; }
--keep class io.flutter.util.** { *; }
--keep class io.flutter.view.** { *; }
--keep class io.flutter.** { *; }
--keep class io.flutter.plugins.** { *; }
-
-# Camera plugin
--keep class io.flutter.plugins.camera.** { *; }
-
-# Flutter Vision specific
--keep class com.visionplugin.flutter_vision.** { *; }
--dontwarn org.tensorflow.**
+# Abaikan error tentang komponen Audio/Support TFLite yang tidak kita pakai
+-dontwarn org.tensorflow.lite.support.**
 -dontwarn org.tensorflow.lite.**
-
--keep class org.tensorflow.** { *; }

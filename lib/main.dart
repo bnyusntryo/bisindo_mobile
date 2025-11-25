@@ -1,50 +1,73 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Diperlukan untuk mengatur orientasi layar
-import 'detection_page.dart'; // Pastikan file detection_page.dart ada di folder yang sama (lib/)
+import 'package:flutter/services.dart';
+import 'intro_page.dart';
 
 void main() async {
-  // 1. Wajib: Pastikan binding Flutter terinisialisasi sebelum akses plugin native (Kamera)
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 2. Opsional: Kunci orientasi layar ke Potrait agar tampilan kamera tidak gepeng/rusak
-  // Jika aplikasimu nanti butuh landscape, hapus bagian SystemChrome ini.
+  // Memperbaiki orientasi yang diizinkan
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
   ]);
 
-  // 3. Jalankan Aplikasi
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+  // Warna Aksen Utama: Dark Teal yang elegan
+  static const Color primaryTeal = Color(0xFF004D40);
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      // Hilangkan banner "DEBUG" di pojok kanan atas
       debugShowCheckedModeBanner: false,
-
-      // Judul Aplikasi (tampil di Recent Apps)
       title: 'BISINDO Detector',
-
-      // Tema Aplikasi
       theme: ThemeData(
-        // Menggunakan Color Scheme Material 3
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueAccent),
+        // Skema Warna: Menggunakan warna Teal yang dalam sebagai seed color
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: primaryTeal,
+          brightness: Brightness.light,
+          // Menggunakan 'surface' untuk background utama (Putih Bersih)
+          surface: Colors.white, 
+        ),
         useMaterial3: true,
 
-        // Styling AppBar agar terlihat modern
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.blueAccent,
-          foregroundColor: Colors.white,
+        // Tipografi: Menggunakan font default Material 3 dengan kontras tinggi
+        textTheme: TextTheme(
+          titleLarge: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey.shade900),
+          bodyMedium: TextStyle(color: Colors.grey.shade700),
+        ),
+
+        // AppBar: Datar (Flat), Bersih, dan Minimalis
+        appBarTheme: AppBarTheme(
+          backgroundColor: Colors.white, 
+          foregroundColor: primaryTeal, 
           centerTitle: true,
-          elevation: 2,
+          elevation: 0, // Menghilangkan bayangan (flat look)
+          surfaceTintColor: Colors.transparent, 
+          titleTextStyle: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: primaryTeal,
+          ),
+        ),
+
+        // Perbaikan Visual Tambahan (Button)
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: primaryTeal,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
         ),
       ),
-
-      // Halaman Awal Langsung ke Deteksi
-      home: const DetectionPage(),
+      home: const IntroPage(), // 👈 Changed from DetectionPage to IntroPage
     );
   }
 }
