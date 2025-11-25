@@ -61,8 +61,10 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/best_float16.tflite
-    - assets/labels.txt
+    - assets/model_abjad.tflite
+    - assets/model_kata.tflite
+    - assets/labels_abjad.txt
+    - assets/labels_kata.txt
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

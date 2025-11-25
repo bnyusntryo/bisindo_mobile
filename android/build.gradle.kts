@@ -1,3 +1,5 @@
+import com.android.build.gradle.LibraryExtension
+
 allprojects {
     repositories {
         google()
@@ -25,6 +27,15 @@ subprojects {
             if (android.namespace == null) {
                 // Set the namespace to the project's group if it's not already set
                 android.namespace = group.toString()
+            }
+        }
+    }
+}
+subprojects {
+    afterEvaluate {
+        if (plugins.hasPlugin("com.android.library")) {
+            extensions.configure<LibraryExtension> {
+                compileSdk = 36
             }
         }
     }
